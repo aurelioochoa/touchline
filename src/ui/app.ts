@@ -505,6 +505,7 @@ export class Game implements ScreenHost {
       autoQuality: this.settings.quality === 'auto',
       crowd: this.settings.crowd3d,
       stadiumFx: this.settings.stadiumFx,
+      playerStyle: this.settings.playerStyle,
       onSpeedChange: (speed) => {
         this.settings.matchSpeed = speed;
         this.persist();

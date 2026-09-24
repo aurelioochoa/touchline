@@ -184,3 +184,63 @@ describe('the limb chain', () => {
     field.dispose();
   });
 });
+
+import { psxGeometry } from './psx.js';
+
+describe('the retro figure', () => {
+  it('is a PlayStation-era budget: well under a thousand triangles', () => {
+    const { geometry, triangles } = psxGeometry();
+    expect(triangles).toBeGreaterThan(400);
+    expect(triangles).toBeLessThan(1000);
+    // Every vertex fully weighted, every UV inside the figure's own cell.
+    const w = geometry.getAttribute('skinWeight') as THREE.BufferAttribute;
+    const uv = geometry.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < w.count; i++) {
+      const sum = w.getX(i) + w.getY(i) + w.getZ(i) + w.getW(i);
+      expect(Math.abs(sum - 1)).toBeLessThan(1e-5);
+      expect(uv.getX(i)).toBeGreaterThanOrEqual(0);
+      expect(uv.getX(i)).toBeLessThanOrEqual(1);
+      expect(uv.getY(i)).toBeGreaterThanOrEqual(0);
+      expect(uv.getY(i)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('stands about 1.8m tall and faces outward everywhere', () => {
+    const { geometry } = psxGeometry();
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox as THREE.Box3;
+    expect(box.max.y - box.min.y).toBeGreaterThan(1.7);
+    expect(box.max.y - box.min.y).toBeLessThan(1.9);
+    // Outward faces: summed over the closed surface, face normals dotted with the offset
+    // from the body's axis come out positive.
+    const p = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const index = geometry.getIndex() as THREE.BufferAttribute;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    let out = 0;
+    for (let t = 0; t < index.count; t += 3) {
+      a.fromBufferAttribute(p, index.getX(t));
+      b.fromBufferAttribute(p, index.getX(t + 1));
+      c.fromBufferAttribute(p, index.getX(t + 2));
+      const n = new THREE.Vector3().crossVectors(b.clone().sub(a), c.clone().sub(a));
+      const centre = a.clone().add(b).add(c).divideScalar(3);
+      out += Math.sign(n.dot(new THREE.Vector3(centre.x, 0, centre.z)));
+    }
+    expect(out).toBeGreaterThan(index.count / 3 * 0.5);
+  });
+
+  it('poses on the same skeleton as the sculpted body', () => {
+    const retro = new FigureField(1, undefined, 'retro');
+    const real = new FigureField(1);
+    const pose = emptyPose();
+    runPose(pose, 1.3, 6, 0, 1);
+    retro.setPose(0, 3, 4, 0.7, pose);
+    real.setPose(0, 3, 4, 0.7, pose);
+    for (const b of BONES) {
+      const x = retro.jointMatrix(0, b).elements;
+      const y = real.jointMatrix(0, b).elements;
+      for (let i = 0; i < 16; i++) expect(x[i]).toBeCloseTo(y[i] as number, 6);
+    }
+    retro.dispose();
+    real.dispose();
+  });
+});

@@ -15,7 +15,7 @@ import { BallView } from './ball.js';
 import { BroadcastCamera, dangerOf, type CameraMode, type CameraPreset } from './camera.js';
 import { Director } from './director.js';
 import { OFFICIAL_KIT, appearanceOf, buildOf, hashId, numberInk, type KitColors } from './appearance.js';
-import { FigureField } from './figure.js';
+import { FigureField, type FigureStyle } from './figure.js';
 import { OFFICIAL_COUNT, emptyOfficials, officialsFor, type Official } from './officials.js';
 import {
   advancePhase,
@@ -157,6 +157,8 @@ export interface RenderOptions {
   /** The modelled crowd, as the settings word it, and the stands' fire and light. */
   crowd?: 'auto' | 'full' | 'half' | 'off';
   stadiumFx?: boolean;
+  /** How the players are drawn: low-poly with painted skins, or sculpted. */
+  playerStyle?: FigureStyle;
 }
 
 /**
@@ -295,7 +297,7 @@ export class RenderClient {
     this.#groundOpts = { crowd: crowdDensity(opts.crowd ?? 'auto', this.#tier), fx: opts.stadiumFx ?? true };
     this.#stadium = new Stadium(0x1d5a, undefined, this.#groundOpts);
     this.scene.add(this.#stadium.group);
-    this.#figures = new FigureField(MAX_FIGURES, tier.bodyCell);
+    this.#figures = new FigureField(MAX_FIGURES, tier.bodyCell, opts.playerStyle ?? 'retro');
     this.#figures.setCastShadow(tier.shadowMap);
     this.#figures.setReceiveShadow(tier.shadowMap);
     this.scene.add(this.#figures.group);

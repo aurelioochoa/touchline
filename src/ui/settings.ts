@@ -36,6 +36,7 @@ export interface SettingsHost {
 const QUALITIES: Settings['quality'][] = ['auto', 'low', 'medium', 'high', 'ultra'];
 const COMMENTARY: Settings['commentary'][] = ['off', 'text', 'voice'];
 const CROWDS: Settings['crowd3d'][] = ['auto', 'full', 'half', 'off'];
+const STYLES: Settings['playerStyle'][] = ['retro', 'realistic'];
 
 /** One labelled row with its control on the right, or under it on a phone. */
 function row(label: string, detail: string, control: HTMLElement): HTMLElement {
@@ -151,6 +152,14 @@ export function graphicsSettingRows(s: Settings, persist: () => void): HTMLEleme
       t('settings.qualityHint'),
       choice(QUALITIES, s.quality, (v) => t(`settings.quality.${v}` as StringKey), (v) => {
         s.quality = v;
+        persist();
+      }),
+    ),
+    row(
+      t('settings.playerStyle'),
+      t('settings.playerStyleHint'),
+      choice(STYLES, s.playerStyle, (v) => t(`settings.playerStyle.${v}` as StringKey), (v) => {
+        s.playerStyle = v;
         persist();
       }),
     ),

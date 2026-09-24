@@ -28,6 +28,7 @@ import { type Pose } from './gait.js';
 import { PATTERN_GLSL, TORSO_HALF_WIDTH, TORSO_HEIGHT } from './kitPattern.js';
 import { digitAtlas } from './textures.js';
 import { sculpt } from './sculpt.js';
+import { CELL, paintFigure, psxGeometry } from './psx.js';
 import {
   BODY_MAX, BODY_MIN, BONE_COUNT, BONES, EYE_R, EYE_X, EYE_Y, EYE_Z, SKULL_Y, SLEEVE,
   bindMatrices, bodyVolumes, bone, kitLines, poseBones, poseScratch, type Bone,
@@ -92,11 +93,19 @@ function body(cell = BODY_CELL) {
  */
 const OLD_SKULL = { c: new THREE.Vector3(0, SKULL_Y, -0.006), r: new THREE.Vector3(0.1035, 0.115, 0.115) };
 const CRANIUM = { c: new THREE.Vector3(0, SKULL_Y + 0.02, -0.012), r: new THREE.Vector3(0.077, 0.092, 0.1) };
-function buildHair(style: HairStyle): THREE.BufferGeometry {
+function buildHair(style: HairStyle, retro = false): THREE.BufferGeometry {
   const HR = 0.115;
   const W = 0xffffff;
+  // A retro head carries its short hair in its texture; only the cuts with volume are
+  // modelled, and with a handful of faces.
+  if (retro && (style === 'hairCrop' || style === 'hairShort')) {
+    const empty = new THREE.BufferGeometry();
+    empty.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+    return empty;
+  }
+  const seg = (n: number) => (retro ? 6 : n);
   const scalp = (rx: number, ry: number, rz: number, lift: number, tilt = -0.5) => ({
-    geo: ellipsoid(rx, ry, rz, 16),
+    geo: ellipsoid(rx, ry, rz, seg(16)),
     color: W,
     pos: [0, SKULL_Y + lift, -0.012] as [number, number, number],
     rot: [tilt, 0, 0] as [number, number, number],
@@ -112,22 +121,22 @@ function buildHair(style: HairStyle): THREE.BufferGeometry {
     case 'hairQuiff':
       geo = mergeParts([
         scalp(HR * 0.95, HR * 0.74, HR * 1.05, 0.028),
-        { geo: ellipsoid(HR * 0.62, HR * 0.4, HR * 0.9, 14), color: W, pos: [0, SKULL_Y + 0.085, 0.03], rot: [-0.25, 0, 0] },
+        { geo: ellipsoid(HR * 0.62, HR * 0.4, HR * 0.9, seg(14)), color: W, pos: [0, SKULL_Y + 0.085, 0.03], rot: [-0.25, 0, 0] },
       ]);
       break;
     case 'hairCurly':
       geo = mergeParts([
         scalp(HR * 1.08, HR * 0.95, HR * 1.14, 0.045, -0.35),
-        { geo: ellipsoid(0.05, 0.045, 0.05, 8), color: W, pos: [-0.06, SKULL_Y + 0.085, -0.01] },
-        { geo: ellipsoid(0.05, 0.045, 0.05, 8), color: W, pos: [0.06, SKULL_Y + 0.085, -0.01] },
-        { geo: ellipsoid(0.055, 0.045, 0.05, 8), color: W, pos: [0, SKULL_Y + 0.1, 0.03] },
-        { geo: ellipsoid(0.055, 0.05, 0.05, 8), color: W, pos: [0, SKULL_Y + 0.07, -0.08] },
+        { geo: ellipsoid(0.05, 0.045, 0.05, seg(8)), color: W, pos: [-0.06, SKULL_Y + 0.085, -0.01] },
+        { geo: ellipsoid(0.05, 0.045, 0.05, seg(8)), color: W, pos: [0.06, SKULL_Y + 0.085, -0.01] },
+        { geo: ellipsoid(0.055, 0.045, 0.05, seg(8)), color: W, pos: [0, SKULL_Y + 0.1, 0.03] },
+        { geo: ellipsoid(0.055, 0.05, 0.05, seg(8)), color: W, pos: [0, SKULL_Y + 0.07, -0.08] },
       ]);
       break;
     case 'hairBun':
       geo = mergeParts([
         scalp(HR * 0.95, HR * 0.76, HR * 1.06, 0.028),
-        { geo: ellipsoid(0.045, 0.04, 0.045, 10), color: W, pos: [0, SKULL_Y + 0.1, -0.085] },
+        { geo: ellipsoid(0.045, 0.04, 0.045, seg(10)), color: W, pos: [0, SKULL_Y + 0.1, -0.085] },
       ]);
       break;
   }
@@ -148,6 +157,15 @@ function buildHair(style: HairStyle): THREE.BufferGeometry {
   }
   geo.computeVertexNormals();
   return geo;
+}
+
+/** How the players are drawn (settings: graphics): sculpted, or low-poly with painted skins. */
+export type FigureStyle = 'realistic' | 'retro';
+
+let retroShared: THREE.BufferGeometry | null = null;
+function retroBody(): THREE.BufferGeometry {
+  if (!retroShared) retroShared = psxGeometry().geometry;
+  return retroShared;
 }
 
 export interface FigureColors {
@@ -208,8 +226,18 @@ export class FigureField {
   readonly #hidden = new THREE.Matrix4().makeScale(0, 0, 0);
   readonly #color = new THREE.Color();
 
-  /** `cell` is the sculpting grid (tiers.ts `bodyCell`): the players' level of detail. */
-  constructor(count: number, cell = BODY_CELL) {
+  /** The retro style's painted skins, one cell per figure, and where it draws them. */
+  readonly #atlas: THREE.Texture | null = null;
+  readonly #atlasCtx: CanvasRenderingContext2D | null = null;
+  readonly #atlasCols: number = 1;
+  readonly #style: FigureStyle;
+
+  /**
+   * `cell` is the sculpting grid (tiers.ts `bodyCell`): the players' level of detail.
+   * `style` 'retro' swaps the sculpted body for the low-poly one with painted skins (psx.ts).
+   */
+  constructor(count: number, cell = BODY_CELL, style: FigureStyle = 'realistic') {
+    this.#style = style;
     this.#count = count;
     this.#builds = new Float32Array(count).fill(1);
     this.#hair = new Uint8Array(count).fill(1);
@@ -224,9 +252,34 @@ export class FigureField {
     this.#tex.minFilter = THREE.NearestFilter;
     this.#tex.needsUpdate = true;
 
-    const { geometry } = body(cell);
-    const lines = kitLines(bind);
-    const material = bodyMaterial(this.#tex, this.#digits, lines);
+    const retro = style === 'retro';
+    let geometry: THREE.BufferGeometry;
+    let material: THREE.Material;
+    if (retro) {
+      geometry = retroBody();
+      this.#atlasCols = Math.max(1, Math.min(8, count));
+      const rows = Math.max(1, Math.ceil(count / this.#atlasCols));
+      if (typeof document !== 'undefined') {
+        const canvas = document.createElement('canvas');
+        canvas.width = this.#atlasCols * CELL;
+        canvas.height = rows * CELL;
+        this.#atlasCtx = canvas.getContext('2d');
+        const t = new THREE.CanvasTexture(canvas);
+        t.colorSpace = THREE.SRGBColorSpace;
+        // No filtering, no mipmaps: the texels ARE the style.
+        t.magFilter = THREE.NearestFilter;
+        t.minFilter = THREE.NearestFilter;
+        t.generateMipmaps = false;
+        t.flipY = false;
+        this.#atlas = t;
+      } else {
+        this.#atlas = new THREE.DataTexture(new Uint8Array([200, 200, 200, 255]), 1, 1);
+      }
+      material = retroMaterial(this.#tex, this.#atlas, this.#atlasCols, rows);
+    } else {
+      geometry = body(cell).geometry;
+      material = bodyMaterial(this.#tex, this.#digits, kitLines(bind));
+    }
     const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
     skinDepth(depth, this.#tex);
     this.#materials.push(material, depth);
@@ -237,10 +290,10 @@ export class FigureField {
     this.#initMesh(this.#body);
 
     // Hair is matte; it rides the head bone rigidly, as a haircut does.
-    const hairMat = hairMaterial();
+    const hairMat = hairMaterial(retro);
     this.#materials.push(hairMat);
     for (const style of HAIR_STYLES) {
-      const mesh = new THREE.InstancedMesh(buildHair(style), hairMat, count);
+      const mesh = new THREE.InstancedMesh(buildHair(style, retro), hairMat, count);
       mesh.name = `hair:${style}`;
       this.#initMesh(mesh);
       this.#hairMeshes.push(mesh);
@@ -309,6 +362,12 @@ export class FigureField {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
     this.#hair[index] = Math.max(0, Math.min(HAIR_STYLES.length - 1, colors.hairStyle ?? 1));
+    if (this.#atlasCtx && this.#atlas) {
+      const ox = (index % this.#atlasCols) * CELL;
+      const oy = Math.floor(index / this.#atlasCols) * CELL;
+      paintFigure(this.#atlasCtx, ox, oy, colors, index * 7919 + (colors.number ?? 0) * 31 + colors.skin);
+      this.#atlas.needsUpdate = true;
+    }
   }
 
   /**
@@ -385,6 +444,7 @@ export class FigureField {
     for (const mesh of this.#meshes()) mesh.dispose();
     for (const m of this.#materials) m.dispose();
     this.#tex.dispose();
+    this.#atlas?.dispose();
     this.#digits.dispose();
     this.#hairMeshes.length = 0;
     this.group.clear();
@@ -672,9 +732,11 @@ function bodyMaterial(tex: THREE.Texture, digits: THREE.Texture, k: ReturnType<t
  * broken up by noise, over a soft sheen — hair's highlight is a band, not a spot. The
  * colour is the player's, per instance.
  */
-function hairMaterial(): THREE.MeshPhysicalMaterial {
+function hairMaterial(retro = false): THREE.MeshPhysicalMaterial {
   const m = new THREE.MeshPhysicalMaterial({
     vertexColors: true,
+    // Faceted for the retro figure, whose haircut is a dozen faces and should look it.
+    flatShading: retro,
     roughness: 0.62,
     metalness: 0,
     sheen: 0.6,
@@ -704,6 +766,59 @@ function hairMaterial(): THREE.MeshPhysicalMaterial {
           float strand = tlN(vec2(around * 90.0 + tlN(vec2(along, around * 6.0)) * 4.0, along * 0.6));
           float clump = tlN(vec2(around * 14.0, along * 0.3));
           diffuseColor.rgb *= 0.62 + 0.5 * strand * (0.6 + 0.4 * clump);
+        }`);
+  };
+  return m;
+}
+
+/**
+ * The retro figure's material: the same GPU skinning, the player's painted skin from the
+ * atlas, and the three things that made a 1998 console look the way it did.
+ *
+ * 1. Vertices snap to a coarse screen grid, so a model shivers very slightly as it moves —
+ *    the console had no sub-pixel precision.
+ * 2. Textures are mapped affinely, not perspective-correct: interpolate uv·w and w and
+ *    divide per pixel, which cancels the perspective divide. On triangles this small the
+ *    swim is a hint, not a distortion.
+ * 3. Colour is cut to fifteen bits with an ordered dither, the grain of every PS1 frame.
+ */
+function retroMaterial(fig: THREE.Texture, atlas: THREE.Texture, cols: number, rows: number): THREE.MeshStandardMaterial {
+  const m = new THREE.MeshStandardMaterial({ map: atlas, roughness: 0.92, metalness: 0 });
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.tlFig = { value: fig };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+        ${SKIN_HEAD}
+        varying vec3 vPsxUv;`)
+      .replace('#include <beginnormal_vertex>', `
+        mat4 tlSkin = tlSkinMatrix();
+        vec3 objectNormal = normalize(mat3(tlSkin) * normal);`)
+      .replace('#include <begin_vertex>', `
+        vec3 transformed = (tlSkin * vec4(position, 1.0)).xyz;`)
+      .replace('#include <project_vertex>', `#include <project_vertex>
+        {
+          // This figure's cell of the atlas.
+          vec2 cell = vec2(float(gl_InstanceID % ${cols}), float(gl_InstanceID / ${cols}));
+          vec2 auv = (cell + uv) / vec2(${cols.toFixed(1)}, ${rows.toFixed(1)});
+          // Snap to a 480x270 grid in clip space: the wobble.
+          vec2 grid = vec2(240.0, 135.0);
+          gl_Position.xy = floor(gl_Position.xy / gl_Position.w * grid + 0.5) / grid * gl_Position.w;
+          vPsxUv = vec3(auv * gl_Position.w, gl_Position.w);
+        }`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vPsxUv;`)
+      .replace('#include <map_fragment>', `
+        diffuseColor *= texture2D(map, vPsxUv.xy / vPsxUv.z);`)
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        {
+          // 4x4 Bayer, then five bits a channel.
+          int bx = int(mod(gl_FragCoord.x, 4.0));
+          int by = int(mod(gl_FragCoord.y, 4.0));
+          int i = bx + by * 4;
+          float b = float(i == 0 ? 0 : i == 1 ? 8 : i == 2 ? 2 : i == 3 ? 10 : i == 4 ? 12 : i == 5 ? 4 : i == 6 ? 14 : i == 7 ? 6
+                        : i == 8 ? 3 : i == 9 ? 11 : i == 10 ? 1 : i == 11 ? 9 : i == 12 ? 15 : i == 13 ? 7 : i == 14 ? 13 : 5) / 16.0 - 0.5;
+          gl_FragColor.rgb = floor(gl_FragColor.rgb * 31.0 + b + 0.5) / 31.0;
         }`);
   };
   return m;

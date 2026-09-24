@@ -45,6 +45,8 @@ export interface Settings {
   crowd3d: 'auto' | 'full' | 'half' | 'off';
   /** Flares, smoke, paper and camera flashes in the stands. */
   stadiumFx: boolean;
+  /** Low-poly players with painted skins, or the sculpted ones (render/psx.ts, figure.ts). */
+  playerStyle: 'retro' | 'realistic';
 }
 
 export function defaultSettings(): Settings {
@@ -59,6 +61,7 @@ export function defaultSettings(): Settings {
     camera: 'tv',
     crowd3d: 'auto',
     stadiumFx: true,
+    playerStyle: 'retro',
   };
 }
 

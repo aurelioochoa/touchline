@@ -1,7 +1,8 @@
 // The figure bench: one kit, four views, big enough to judge the model.
 //
 //   npm run dev, then open http://localhost:5179/scripts/figure.html
-//   (?view=front|side|run|face picks one view full-frame; no parameter shows all four)
+//   (?view=front|side|run|face picks one view full-frame; no parameter shows all four;
+//   ?style=retro shows the low-poly figure with painted skins)
 //
 // The match is a poor place to judge a body — the broadcast camera is forty metres away
 // and the players never stand still. This page stands one footballer in the light, the
@@ -42,7 +43,7 @@ ground.receiveShadow = true;
 scene.add(ground);
 
 // ?cell= picks the sculpting grid: 0.016 is the low tier, 0.009 ultra (tiers.ts).
-const field = new FigureField(4, Number(params.get('cell') ?? '0.009'));
+const field = new FigureField(4, Number(params.get('cell') ?? '0.009'), params.get('style') === 'retro' ? 'retro' : 'realistic');
 field.setCastShadow(true);
 field.setReceiveShadow(true);
 scene.add(field.group);
