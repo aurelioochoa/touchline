@@ -14,6 +14,7 @@
 // "no console errors" ship gate.
 
 import type { CrowdCall, CrowdReaction } from './crowdReact.js';
+import { BARRA_BPM, BarraSound } from './barra.js';
 
 const MASTER = 0.5;
 
@@ -88,6 +89,8 @@ export class MatchAudio {
   #claps: AudioBuffer | null = null;
   /** When each crowd call last went off, in context time. */
   readonly #lastCall = new Map<CrowdCall, number>();
+  /** The home end's band and its whistling (barra.ts). */
+  #barra: BarraSound | null = null;
 
   get enabled(): boolean {
     return this.#enabled;
@@ -233,6 +236,8 @@ export class MatchAudio {
     chant.connect(master);
     this.#chantGain = chant;
 
+    this.#barra = new BarraSound(ctx, master, send, this.#white);
+
     // --- the weather bed ---------------------------------------------------------
     //
     // Two voices off the same noise buffer. Rain is the white end of it — the crowd bed's
@@ -295,6 +300,8 @@ export class MatchAudio {
   dispose(): void {
     if (this.#chantTimer !== null) clearInterval(this.#chantTimer);
     this.#chantTimer = null;
+    this.#barra?.dispose();
+    this.#barra = null;
     try {
       this.#bedSource?.stop();
       for (const src of this.#weatherSources) src.stop();
@@ -337,6 +344,8 @@ export class MatchAudio {
 
     // The chant only starts when the crowd is genuinely behind the managed team, and it
     // stops itself. A rhythmic bed that never goes away stops carrying information.
+    this.#barra?.update(this.#excitement);
+
     const wantChant = support > 0.35;
     if (wantChant && this.#chantTimer === null) this.#startChant();
     else if (!wantChant && this.#chantTimer !== null) this.#stopChant();
@@ -632,6 +641,14 @@ export class MatchAudio {
    * groan falls in pitch and stays dark, which is what an away goal sounds like from
    * inside a home end.
    */
+  /**
+   * The home side has scored. The crowd's roar is `goal()`'s, and is about whether it was
+   * YOUR goal; this is the home end's own answer — fanfare, drums, flares — whoever you are.
+   */
+  homeGoal(): void {
+    if (this.#enabled) this.#barra?.goal();
+  }
+
   goal(mine: boolean): void {
     const ctx = this.#ctx;
     const master = this.#master;
@@ -860,6 +877,8 @@ export class MatchAudio {
         break;
       case 'boo':
         this.#vowel('u', 2.2, 0.13 * L + 0.03, { attack: 0.3, glide: 0.94, pitch: 0.75, tremolo: 4.5 });
+        // A South American ground whistles at the referee as much as it boos him.
+        this.#whistles(L * 0.6);
         break;
       case 'jeer':
         this.#whistles(L);
@@ -1086,10 +1105,10 @@ export class MatchAudio {
     const chant = this.#chantGain;
     if (!ctx || !chant || this.#chantTimer !== null) return;
     chant.gain.setTargetAtTime(0.5, ctx.currentTime, 0.6);
-    // A two-beat pulse at about 100bpm. Not a tune — a stadium does not have one, it has
-    // a rhythm, and a rhythm made of filtered noise is what a chant sounds like from the
-    // middle of the pitch.
-    this.#chantTimer = setInterval(() => this.#chantHit(), 600) as unknown as number;
+    // A pulse on the beat of the barra's drums (barra.ts), so the ground chants to the band
+    // rather than against it. Not a tune — a rhythm made of filtered noise is what a chant
+    // sounds like from the middle of the pitch.
+    this.#chantTimer = setInterval(() => this.#chantHit(), 60000 / BARRA_BPM) as unknown as number;
   }
 
   #stopChant(): void {

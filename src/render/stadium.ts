@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { PITCH_LENGTH, PITCH_WIDTH } from '../sim/match/pitch.js';
 import { concreteTexture, crowdTexture, glazingTextures, roofSheetTexture } from './textures.js';
 import { SURROUND } from './pitch.js';
+import { Ultras, type Rake } from './ultras.js';
 
 /**
  * The bowl, in metres. These are not free numbers: `camera.ts` places every preset
@@ -99,6 +100,8 @@ export class Stadium {
   /** Seconds into the current wave, or -1. */
   #waveT = -1;
   #waveLen = 6;
+  /** The home end's barra, and the ground's cameras and signs (ultras.ts). */
+  readonly #ultras: Ultras;
 
   constructor(seed: number, colors: StadiumColors = { primary: 0x2f8f43, secondary: 0xffffff }) {
     this.group.name = 'stadium';
@@ -160,6 +163,29 @@ export class Stadium {
     this.#addStand(parts, sideWidth, seed + 2, colors, 0, -halfW, Math.PI);
     this.#addStand(parts, endWidth, seed + 3, colors, halfL, 0, Math.PI / 2);
     this.#addStand(parts, endWidth, seed + 4, colors, -halfL, 0, -Math.PI / 2);
+
+    // Every seating surface, for the cameras and the signs; the lower tier behind the
+    // goal at −X is the home end, where the barra stands.
+    const rakes: Rake[] = [];
+    const stands: [number, number, number, number][] = [
+      [sideWidth, 0, halfW, 0],
+      [sideWidth, 0, -halfW, Math.PI],
+      [endWidth, halfL, 0, Math.PI / 2],
+      [endWidth, -halfL, 0, -Math.PI / 2],
+    ];
+    for (const [width, x, z, rotY] of stands) {
+      rakes.push({ x, z, rotY, width, z0: 0, y0: WALL_HEIGHT, z1: LOWER_DEPTH, y1: WALL_HEIGHT + LOWER_RISE });
+      rakes.push({ x, z, rotY, width, z0: LOWER_DEPTH, y0: UPPER_FRONT, z1: STAND_DEPTH, y1: WALL_HEIGHT + STAND_HEIGHT });
+    }
+    this.#ultras = new Ultras({
+      seed,
+      primary: colors.primary,
+      secondary: colors.secondary,
+      ...(colors.name ? { name: colors.name } : {}),
+      home: rakes[6] as Rake,
+      rakes,
+    });
+    this.group.add(this.#ultras.group);
 
     // The corners. Four rectangular stands leave four diagonal holes with sky behind them,
     // and a hole in a stadium reads as a mistake from every camera angle that catches one.
@@ -267,6 +293,7 @@ export class Stadium {
     if (this.#ledMat) this.#ledMat.emissiveIntensity = on ? 1.7 : 0.95;
     for (const m of this.#glassMats) m.emissiveIntensity = on ? 1.5 : 0.1;
     this.#crowdUniforms.uNight.value = on ? 1 : 0;
+    this.#ultras.setNight(on);
   }
 
   /**
@@ -279,6 +306,16 @@ export class Stadium {
 
   roar(): void {
     this.#roar = 1;
+  }
+
+  /** The home side has scored: the end goes up in flares and paper. */
+  homeGoal(): void {
+    this.#ultras.goal();
+  }
+
+  /** A big moment — a shot, a save: the ground's cameras go off, `level` 0..1. */
+  flash(level: number): void {
+    this.#ultras.flash(level);
   }
 
   /** A reaction, 0..1: the stands come up by that much and settle. */
@@ -317,12 +354,14 @@ export class Stadium {
     this.#crowdUniforms.uTime.value = this.#t;
     if (this.#skyMat) (this.#skyMat.uniforms.uTime as { value: number }).value = this.#t;
     this.#crowdUniforms.uExcite.value = Math.min(1, this.#danger * 0.45 + this.#roar + this.#buzz * 0.75);
+    this.#ultras.update(dt, this.#crowdUniforms.uExcite.value);
     // The boards scroll, and scroll faster when something has happened.
     if (this.#ledTex) this.#ledTex.offset.x = (this.#ledTex.offset.x + dt * (0.018 + this.#roar * 0.12)) % 1;
   }
 
   dispose(): void {
     for (const d of this.#disposables) d.dispose();
+    this.#ultras.dispose();
     this.group.clear();
   }
 

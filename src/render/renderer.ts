@@ -624,6 +624,9 @@ export class RenderClient {
       case 'goal': {
         this.cam.kick(0.5);
         this.#stadium.roar();
+        // The barra is the HOME end: its flares are for a goal that counts for the home
+        // side, whoever put it in. `side` is the scorer's, so an own goal flips it.
+        if ((e.side === 'home') !== e.ownGoal) this.#stadium.homeGoal();
         this.#pitch.netHit(this.#ballX < PITCH_LENGTH / 2 ? 0 : 1, toSceneZ(this.#ballY), this.#ballZ, this.#ballSpeed);
         // The side that scored celebrates, whoever put it in; the other side does not.
         for (const v of this.#visuals) {
@@ -642,6 +645,8 @@ export class RenderClient {
         // Above the shoulders it was not a kick.
         if (this.#ballZ > 1.25) this.#startAction(e.by, 'header', 0.6);
         else this.#strike(e.by, 'kick', 0.48, KICK_CONTACT);
+        // Every phone in the ground comes up for a shot.
+        this.#stadium.flash(0.5 + this.#danger * 0.5);
         break;
       case 'pass':
         if (this.#ballZ > 1.25) this.#startAction(e.from, 'header', 0.55);

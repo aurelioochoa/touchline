@@ -1003,6 +1003,8 @@ export class MatchScreen {
       case 'goal': {
         const scorer = this.#find(e.by);
         audio.goal(mine !== e.ownGoal);
+        // The home end celebrates a goal for the home side, whoever you manage.
+        if ((e.side === 'home') !== e.ownGoal) audio.homeGoal();
         this.#goalFlash(e.side, mine !== e.ownGoal);
         this.#pushTick(
           t('match.goalBy', { name: scorer ? shortName(scorer.name) : '', min: minute }),
