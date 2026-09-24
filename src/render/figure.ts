@@ -1,30 +1,37 @@
-// Twenty-five footballers and officials, in about a dozen draw calls.
+// Twenty-five footballers and officials: one sculpted body, drawn twenty-five times.
 //
-// The trick is to instance PER LIMB TYPE rather than per player: one InstancedMesh holding
-// fifty thighs, another holding fifty shins, and so on. A mesh per player would be
-// 25 × 16 = 400 draw calls before the pitch is drawn; this is eleven, which leaves the
-// whole rest of the frame budget for everything else (design §12).
+// The body is a single closed mesh (body.ts describes it, sculpt.ts builds it), skinned to
+// thirteen bones. There is no SkinnedMesh here, because three.js skins one mesh per draw
+// call and twenty-five of them is twenty-five draw calls plus twenty-five skeleton
+// uploads. Instead the body is ONE InstancedMesh, and the skinning happens in its vertex
+// shader: every figure's bone matrices sit in a row of a small float texture, and each
+// instance reads its own row by `gl_InstanceID`. The figure's colours ride in the same row,
+// so the whole squad — both kits, every skin tone — is one draw call for the bodies and
+// five for the haircuts (design §12).
 //
-// No skeleton, no skinning, no loader, no asset file. Each limb is a rigid primitive from
-// kit.ts and the pose solver decides where it goes.
+// The first figure was the other way round: sixteen rigid primitives per player, one
+// InstancedMesh per limb type. Cheap, and it looked exactly like what it was — a kit of
+// parts, with a ball at every joint and a gap wherever two tubes met. A body that is one
+// skin bends at the knee the way a knee bends, and has a shoulder rather than a sphere
+// where the arm meets the chest.
 //
 // Frame convention, per figure: +Z is the way he is facing, +Y is up, the origin is on the
-// grass between his feet. Limb geometries are built with the JOINT at their origin
-// extending DOWN — the one exception is the head, which hangs UP off the shoulder line
-// because that is where a neck actually goes.
+// grass between his feet.
 //
-// WHY ELEVEN GROUPS AND NOT EIGHT. A limb's colour comes from `instanceColor`, which
-// MULTIPLIES the baked vertex colour. So one instance can be a shade of one hue and never
-// two: a white sock on a red shirt is not expressible on the same instance as the shin
-// above it. The first version worked around that by tinting the whole shin 'shirt' — it
-// was standing in for a sock, and the leg above it was lost. Splitting sleeve, sock and
-// hair into groups of their own is what buys a kit that reads as a kit.
+// THE KIT IS PAINTED, NOT MODELLED. Which part of the body is shirt, shorts, sock or boot is
+// decided per pixel from the vertex's position in the bind pose (body.ts `kitLines`), so a
+// hem is a crisp line however coarse the mesh, and one mesh serves every kit.
 
 import * as THREE from 'three';
-import { capsule, cylinder, ellipsoid, lathe, mergeParts, smoothPaintMaterial, sphere, torus } from './kit.js';
-import { RIG, type Pose } from './gait.js';
+import { ellipsoid, mergeParts, smoothPaintMaterial } from './kit.js';
+import { type Pose } from './gait.js';
 import { PATTERN_GLSL, TORSO_HALF_WIDTH, TORSO_HEIGHT } from './kitPattern.js';
 import { digitAtlas } from './textures.js';
+import { sculpt } from './sculpt.js';
+import {
+  BODY_MAX, BODY_MIN, BONE_COUNT, BONES, SKULL_Y, SLEEVE,
+  bindMatrices, bodyVolumes, bone, kitLines, poseBones, poseScratch, type Bone,
+} from './body.js';
 
 /**
  * The haircuts. Each is its own instanced group, and a figure shows exactly one of them:
@@ -32,284 +39,108 @@ import { digitAtlas } from './textures.js';
  * draw calls buys a squad that is not eleven identical swim caps.
  */
 export const HAIR_STYLES = ['hairCrop', 'hairShort', 'hairQuiff', 'hairCurly', 'hairBun'] as const;
-type HairLimb = (typeof HAIR_STYLES)[number];
+type HairStyle = (typeof HAIR_STYLES)[number];
 
-/** The limb groups, in draw order. Each becomes one InstancedMesh. */
-export const LIMBS = [
-  'head',
-  ...HAIR_STYLES,
-  'torso',
-  'pelvis',
-  'shortsLeg',
-  'sleeve',
-  'upperArm',
-  'forearm',
-  'thigh',
-  'shin',
-  'sock',
-  'foot',
-] as const;
-export type Limb = (typeof LIMBS)[number];
-
-const isHair = (limb: Limb): limb is HairLimb => (HAIR_STYLES as readonly string[]).includes(limb);
-
-/** How many of each limb a figure has. */
-const LIMB_COUNT: Readonly<Record<Limb, number>> = {
-  head: 1,
-  hairCrop: 1,
-  hairShort: 1,
-  hairQuiff: 1,
-  hairCurly: 1,
-  hairBun: 1,
-  torso: 1,
-  pelvis: 1,
-  shortsLeg: 2,
-  sleeve: 2,
-  upperArm: 2,
-  forearm: 2,
-  thigh: 2,
-  shin: 2,
-  sock: 2,
-  foot: 2,
-};
-
-/** Which colour a limb takes. Kit colours come from the club; skin and hair from the player. */
-type Tint = 'shirt' | 'sleeve' | 'shorts' | 'sock' | 'skin' | 'hair' | 'boot';
-const LIMB_TINT: Readonly<Record<Limb, Tint>> = {
-  head: 'skin',
-  hairCrop: 'hair',
-  hairShort: 'hair',
-  hairQuiff: 'hair',
-  hairCurly: 'hair',
-  hairBun: 'hair',
-  torso: 'shirt',
-  pelvis: 'shorts',
-  shortsLeg: 'shorts',
-  sleeve: 'sleeve',
-  upperArm: 'skin',
-  forearm: 'skin',
-  thigh: 'skin',
-  shin: 'skin',
-  sock: 'sock',
-  foot: 'boot',
-};
-
-/** What each limb is made of, which decides how it takes the light. */
-type Surface = 'skin' | 'hair' | 'cloth' | 'boot';
-const LIMB_SURFACE: Readonly<Record<Limb, Surface>> = {
-  head: 'skin',
-  hairCrop: 'hair',
-  hairShort: 'hair',
-  hairQuiff: 'hair',
-  hairCurly: 'hair',
-  hairBun: 'hair',
-  torso: 'cloth',
-  pelvis: 'cloth',
-  shortsLeg: 'cloth',
-  sleeve: 'cloth',
-  upperArm: 'skin',
-  forearm: 'skin',
-  thigh: 'skin',
-  shin: 'skin',
-  sock: 'cloth',
-  foot: 'boot',
-};
+/** Grid spacing the body is sculpted at. Finer is smoother and costs triangles. */
+const BODY_CELL = 0.013;
 
 /**
- * Where the head joint sits above the torso's own origin.
+ * One row of the figure texture: the bones' skinning matrices (four texels each), then the
+ * colours. The shader indexes these by number, so the order is load-bearing.
+ */
+const COL = {
+  shirt: BONE_COUNT * 4,
+  sleeve: BONE_COUNT * 4 + 1,
+  shorts: BONE_COUNT * 4 + 2,
+  sock: BONE_COUNT * 4 + 3,
+  skin: BONE_COUNT * 4 + 4,
+  boot: BONE_COUNT * 4 + 5,
+  hair: BONE_COUNT * 4 + 6,
+  /** rgb: the pattern's colour; a: the KIT_PATTERNS index. */
+  trim: BONE_COUNT * 4 + 7,
+  /** rgb: the badge; a: 1 if there is one. */
+  chest: BONE_COUNT * 4 + 8,
+  /** rgb: the number's colour; a: number + style / 8, or 0 for none. */
+  number: BONE_COUNT * 4 + 9,
+} as const;
+const ROW = 64;
+
+/** Built once per page: sculpting takes a few hundred milliseconds and the body never changes. */
+let shared: { geometry: THREE.BufferGeometry; bind: THREE.Matrix4[]; bindInv: THREE.Matrix4[] } | null = null;
+function body() {
+  if (!shared) {
+    const bind = bindMatrices();
+    const { geometry } = sculpt({ bind, volumes: bodyVolumes(bind), cell: BODY_CELL, min: BODY_MIN, max: BODY_MAX });
+    shared = { geometry, bind, bindInv: bind.map((m) => m.clone().invert()) };
+  }
+  return shared;
+}
+
+/**
+ * The haircuts, as shells over the cranium in the head bone's frame.
  *
- * Almost zero, and that is the point. The first version put the head node
- * `neck + 0.4 × headRadius` up and then built the skull entirely BELOW it, so the crown
- * landed 126mm above the shoulder line and the whole figure stood 1.57m — a head shorter
- * than the 1.8m the rig claims, which is most of why twenty-two of them read as lumps.
- * The head now hangs upward off the shoulder line, which also makes `headPitch` pivot at
- * the base of the neck, where a nod actually pivots.
+ * Written against the old, oversized skull and then fitted to the sculpted one by the same
+ * affine map that takes one cranium onto the other — the shapes are the same haircut, the
+ * head under them is simply the right size now.
  */
-const HEAD_JOINT_Y = 0.015;
-const NECK_LENGTH = 0.1;
-/** Centre of the skull above the head joint. */
-const SKULL_Y = NECK_LENGTH + RIG.headRadius * 0.94;
-const HR = RIG.headRadius;
-
-/**
- * Baked shades. The instance colour MULTIPLIES the vertex colour, so a part baked dark grey
- * comes out as a darker version of whatever the instance is — a boot's sole in the boot's
- * colour but deeper, lips in the player's own skin. Near-black is near-black on anyone,
- * which is what the eyes and brows want.
- */
-const W = 0xffffff;
-const SOLE = 0x2a2a2a;
-const EYE = 0x141414;
-const BROW = 0xb8aca6;
-const LIP = 0xc7928a;
-/** A little baked occlusion where cloth folds or meets skin. */
-const CREASE = 0xd6d6d6;
-
-/**
- * Geometry per limb, built once. White except where a shade is baked (see above) — the
- * colour arrives per instance, so one geometry serves both teams, every skin tone and every
- * hair colour.
- *
- * Smooth-shaded solids of revolution, not boxes. The first figure was flat-shaded boxes and
- * capsules, which holds up at broadcast distance and falls apart the moment the camera comes
- * in for a replay: a thigh that does not taper, a head with no face and a boot that is a
- * brick. The profiles below are measured off a 1.8m adult, and they are what a close-up is.
- */
-function buildLimbGeometry(limb: Limb): THREE.BufferGeometry {
-  // A scalp shell: tilted back so the hairline sits above the brow rather than over the
-  // eyes, which is the failure mode of every procedural haircut.
+const OLD_SKULL = { c: new THREE.Vector3(0, SKULL_Y, -0.006), r: new THREE.Vector3(0.1035, 0.115, 0.115) };
+const CRANIUM = { c: new THREE.Vector3(0, SKULL_Y + 0.02, -0.012), r: new THREE.Vector3(0.077, 0.092, 0.1) };
+function buildHair(style: HairStyle): THREE.BufferGeometry {
+  const HR = 0.115;
+  const W = 0xffffff;
   const scalp = (rx: number, ry: number, rz: number, lift: number, tilt = -0.5) => ({
-    geo: ellipsoid(rx, ry, rz, 14),
+    geo: ellipsoid(rx, ry, rz, 16),
     color: W,
     pos: [0, SKULL_Y + lift, -0.012] as [number, number, number],
     rot: [tilt, 0, 0] as [number, number, number],
   });
-  switch (limb) {
-    case 'head':
-      // Neck, skull, jaw, and a face: brow, nose, eyes, ears, lips. At broadcast distance
-      // none of it resolves; in a replay it is the difference between a person and a doll.
-      return mergeParts([
-        { geo: lathe([[0.05, NECK_LENGTH + 0.02], [0.052, NECK_LENGTH * 0.5], [0.06, 0]], 10), color: W },
-        { geo: ellipsoid(HR * 0.9, HR * 1.0, HR * 1.0, 16), color: W, pos: [0, SKULL_Y, -0.006] },
-        // The jaw: narrower than the skull, carried forward, and down.
-        { geo: ellipsoid(HR * 0.7, HR * 0.6, HR * 0.74, 12), color: W, pos: [0, SKULL_Y - 0.055, 0.012] },
-        { geo: ellipsoid(0.028, 0.02, 0.024, 8), color: W, pos: [0, SKULL_Y - 0.1, 0.045] },
-        // Brow ridge: shape, not colour — a dark bar here reads as sunglasses.
-        { geo: ellipsoid(0.05, 0.011, 0.018, 8), color: BROW, pos: [0, SKULL_Y + 0.028, 0.098] },
-        { geo: ellipsoid(0.012, 0.024, 0.018, 8), color: W, pos: [0, SKULL_Y - 0.004, 0.11] },
-        { geo: ellipsoid(0.008, 0.006, 0.004, 6), color: EYE, pos: [-0.032, SKULL_Y + 0.011, 0.103] },
-        { geo: ellipsoid(0.008, 0.006, 0.004, 6), color: EYE, pos: [0.032, SKULL_Y + 0.011, 0.103] },
-        { geo: ellipsoid(0.02, 0.006, 0.01, 6), color: LIP, pos: [0, SKULL_Y - 0.05, 0.093] },
-        { geo: ellipsoid(0.01, 0.026, 0.018, 6), color: W, pos: [-HR * 0.9, SKULL_Y - 0.004, -0.005] },
-        { geo: ellipsoid(0.01, 0.026, 0.018, 6), color: W, pos: [HR * 0.9, SKULL_Y - 0.004, -0.005] },
-      ]);
+  let geo: THREE.BufferGeometry;
+  switch (style) {
     case 'hairCrop':
-      // Clippered: a skin-tight shell.
-      return mergeParts([scalp(HR * 0.935, HR * 0.72, HR * 1.04, 0.026, -0.5)]);
+      geo = mergeParts([scalp(HR * 0.935, HR * 0.72, HR * 1.04, 0.026, -0.5)]);
+      break;
     case 'hairShort':
-      return mergeParts([
-        scalp(HR * 0.96, HR * 0.78, HR * 1.07, 0.03),
-        // Sideburns down to the top of the ear.
-        { geo: ellipsoid(0.008, 0.028, 0.02, 6), color: W, pos: [-HR * 0.9, SKULL_Y + 0.004, 0.02] },
-        { geo: ellipsoid(0.008, 0.028, 0.02, 6), color: W, pos: [HR * 0.9, SKULL_Y + 0.004, 0.02] },
-      ]);
+      geo = mergeParts([scalp(HR * 0.96, HR * 0.78, HR * 1.07, 0.03)]);
+      break;
     case 'hairQuiff':
-      // Short at the sides, volume on top swept forward.
-      return mergeParts([
+      geo = mergeParts([
         scalp(HR * 0.95, HR * 0.74, HR * 1.05, 0.028),
-        { geo: ellipsoid(HR * 0.62, HR * 0.4, HR * 0.9, 12), color: W, pos: [0, SKULL_Y + 0.085, 0.03], rot: [-0.25, 0, 0] },
+        { geo: ellipsoid(HR * 0.62, HR * 0.4, HR * 0.9, 14), color: W, pos: [0, SKULL_Y + 0.085, 0.03], rot: [-0.25, 0, 0] },
       ]);
+      break;
     case 'hairCurly':
-      // A full, rounded shape standing clear of the scalp, with a few lumps so the edge
-      // against the sky is not a perfect curve.
-      return mergeParts([
+      geo = mergeParts([
         scalp(HR * 1.08, HR * 0.95, HR * 1.14, 0.045, -0.35),
         { geo: ellipsoid(0.05, 0.045, 0.05, 8), color: W, pos: [-0.06, SKULL_Y + 0.085, -0.01] },
         { geo: ellipsoid(0.05, 0.045, 0.05, 8), color: W, pos: [0.06, SKULL_Y + 0.085, -0.01] },
         { geo: ellipsoid(0.055, 0.045, 0.05, 8), color: W, pos: [0, SKULL_Y + 0.1, 0.03] },
         { geo: ellipsoid(0.055, 0.05, 0.05, 8), color: W, pos: [0, SKULL_Y + 0.07, -0.08] },
       ]);
+      break;
     case 'hairBun':
-      // Pulled back tight, with a bun at the crown.
-      return mergeParts([
+      geo = mergeParts([
         scalp(HR * 0.95, HR * 0.76, HR * 1.06, 0.028),
         { geo: ellipsoid(0.045, 0.04, 0.045, 10), color: W, pos: [0, SKULL_Y + 0.1, -0.085] },
       ]);
-    case 'torso': {
-      // Hem to shoulders as one lathe, flattened front-to-back into the shape of a chest,
-      // plus deltoid caps and a collar. One continuous surface — the pattern shader draws
-      // across it in the torso's own coordinates, so a hoop stays one hoop.
-      const DEPTH = 0.58;
-      const body = lathe([
-        [0.06, 0.012], [0.13, 0.004], [0.18, -0.03], [0.205, -0.075], [0.212, -0.17],
-        [0.2, -0.28], [0.183, -0.38], [0.176, -0.46], [0.18, -0.52], [0.17, -0.535],
-      ], 20);
-      body.scale(1, 1, DEPTH);
-      return mergeParts([
-        { geo: body, color: W },
-        { geo: ellipsoid(0.08, 0.07, 0.075, 12), color: W, pos: [-0.172, -0.058, 0] },
-        { geo: ellipsoid(0.08, 0.07, 0.075, 12), color: W, pos: [0.172, -0.058, 0] },
-        { geo: torus(0.068, 0.014, 16), color: CREASE, pos: [0, 0.004, 0.006], rot: [Math.PI / 2 + 0.25, 0, 0], scale: [1, 0.78, 1] },
-      ]);
-    }
-    case 'pelvis': {
-      // The seat of the shorts: a rounded waist closing under the crotch. The legs of the
-      // shorts are NOT here — they ride the thighs (shortsLeg), or a striding thigh pokes
-      // out through a pair of shorts that stayed where they were.
-      const hips = lathe([[0.168, 0.012], [0.182, -0.06], [0.186, -0.12], [0.16, -0.19], [0.08, -0.215]], 16);
-      hips.scale(1, 1, 0.66);
-      return mergeParts([
-        { geo: hips, color: W },
-        { geo: torus(0.17, 0.01, 18), color: CREASE, pos: [0, 0.008, 0], rot: [Math.PI / 2, 0, 0], scale: [1, 0.66, 1] },
-      ]);
-    }
-    case 'shortsLeg':
-      // Over the top of the thigh, following it: a loose tube that flares to the hem.
-      return mergeParts([
-        { geo: ellipsoid(0.1, 0.07, 0.1, 12), color: W, pos: [0, 0.0, 0] },
-        { geo: lathe([[0.1, 0], [0.104, -0.09], [0.108, -0.17], [0.106, -0.178]], 14), color: W, scale: [0.97, 1, 1.07] },
-        { geo: torus(0.105, 0.006, 16), color: CREASE, pos: [0, -0.174, 0], rot: [Math.PI / 2, 0, 0], scale: [0.97, 1.07, 1] },
-      ]);
-    case 'sleeve':
-      // A short sleeve over the top of the upper arm, with a cuff.
-      return mergeParts([
-        { geo: ellipsoid(0.072, 0.07, 0.07, 12), color: W, pos: [0, -0.012, 0] },
-        { geo: lathe([[0.072, -0.01], [0.07, -0.08], [0.066, -0.155], [0.064, -0.162]], 12), color: W },
-        { geo: torus(0.063, 0.007, 14), color: CREASE, pos: [0, -0.158, 0], rot: [Math.PI / 2, 0, 0] },
-      ]);
-    case 'upperArm':
-      return mergeParts([
-        { geo: sphere(0.052, 10), color: W },
-        // Deltoid into bicep, narrowing to the elbow.
-        { geo: lathe([[0.052, 0], [0.05, -0.06], [0.049, -0.13], [0.043, -0.22], [0.038, -RIG.upperArm]], 12), color: W },
-      ]);
-    case 'forearm':
-      return mergeParts([
-        { geo: sphere(0.039, 10), color: W },
-        // Thick below the elbow, thin at the wrist — the forearm's one characteristic curve.
-        { geo: lathe([[0.04, 0], [0.043, -0.06], [0.038, -0.15], [0.027, -RIG.forearm + 0.015], [0.026, -RIG.forearm]], 12), color: W, scale: [1, 1, 0.9] },
-        // A loosely closed hand: palm, knuckles, thumb.
-        { geo: ellipsoid(0.03, 0.05, 0.022, 10), color: W, pos: [0, -RIG.forearm - 0.045, 0.004] },
-        { geo: ellipsoid(0.026, 0.02, 0.026, 8), color: W, pos: [0, -RIG.forearm - 0.088, 0.012] },
-        { geo: capsule(0.011, 0.03), color: W, pos: [0, -RIG.forearm - 0.04, 0.03], rot: [0.5, 0, 0] },
-      ]);
-    case 'thigh':
-      // Widest just below the hip where the quad sits, tapering hard into the knee.
-      return mergeParts([
-        { geo: sphere(0.08, 12), color: W, pos: [0, 0.005, 0] },
-        { geo: lathe([[0.08, 0], [0.087, -0.09], [0.08, -0.2], [0.066, -0.32], [0.054, -RIG.thigh]], 14), color: W, scale: [0.95, 1, 1.06] },
-        { geo: sphere(0.055, 10), color: W, pos: [0, -RIG.thigh, 0.004] },
-      ]);
-    case 'shin': {
-      // The calf is behind the shinbone, not around it: a lathe for the bone line and an
-      // offset ellipsoid for the muscle, which is what makes a leg read side-on.
-      return mergeParts([
-        { geo: sphere(0.054, 10), color: W, pos: [0, -0.01, 0] },
-        { geo: lathe([[0.053, 0], [0.056, -0.07], [0.046, -0.2], [0.035, -0.34], [0.033, -RIG.shin]], 12), color: W },
-        { geo: ellipsoid(0.045, 0.1, 0.045, 10), color: W, pos: [0, -0.13, -0.018] },
-      ]);
-    }
-    case 'sock':
-      // Knee-length, over the calf, with the turned-over top a real sock has. Radii sit
-      // just outside the shin and calf at every height or the skin pokes through.
-      return mergeParts([
-        { geo: lathe([[0.066, -0.075], [0.068, -0.1], [0.063, -0.16], [0.05, -0.26], [0.041, -0.35], [0.039, -RIG.shin - 0.005]], 12), color: W, scale: [1, 1, 1.02], pos: [0, 0, -0.006] },
-        { geo: torus(0.064, 0.009, 14), color: CREASE, pos: [0, -0.082, -0.006], rot: [Math.PI / 2, 0, 0] },
-      ]);
-    case 'foot':
-      // Origin at the ankle. A boot: collar, a heel counter, a tapered upper running to a
-      // rounded toe, and a darker sole, all in the boot colour. The sole's underside lands
-      // at the ankle height gait.ts plants on.
-      return mergeParts([
-        { geo: cylinder(0.042, 0.046, 0.05, 10), color: W, pos: [0, -0.018, -0.008] },
-        { geo: ellipsoid(0.048, 0.04, 0.058, 10), color: W, pos: [0, -0.034, -0.03] },
-        { geo: ellipsoid(0.047, 0.033, 0.12, 12), color: W, pos: [0, -0.036, 0.055] },
-        { geo: ellipsoid(0.04, 0.026, 0.05, 10), color: W, pos: [0, -0.042, 0.14] },
-        { geo: ellipsoid(0.05, 0.009, 0.14, 12), color: SOLE, pos: [0, -0.059, 0.045] },
-        // A stripe down the side: every boot has one, and it is what sells it as a boot.
-        { geo: ellipsoid(0.049, 0.01, 0.05, 8), color: CREASE, pos: [0, -0.03, 0.035], rot: [0.35, 0, 0] },
-      ]);
+      break;
   }
+  // Old cranium onto new, a few percent proud so the shell never sinks into the scalp.
+  const s = CRANIUM.r.clone().divide(OLD_SKULL.r).multiplyScalar(1.035);
+  geo.translate(-OLD_SKULL.c.x, -OLD_SKULL.c.y, -OLD_SKULL.c.z);
+  geo.scale(s.x, s.y, s.z);
+  geo.translate(CRANIUM.c.x, CRANIUM.c.y, CRANIUM.c.z);
+  // And nowhere inside the cranium: a clippered cut is a millimetre-thin shell, and where
+  // it dipped under the sculpted scalp the crown showed through as a bald patch.
+  const p = geo.getAttribute('position') as THREE.BufferAttribute;
+  const d = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    d.fromBufferAttribute(p, i).sub(CRANIUM.c);
+    const k = Math.hypot(d.x / CRANIUM.r.x, d.y / CRANIUM.r.y, d.z / CRANIUM.r.z);
+    if (k < 1.05) d.multiplyScalar(1.05 / k);
+    p.setXYZ(i, CRANIUM.c.x + d.x, CRANIUM.c.y + d.y, CRANIUM.c.z + d.z);
+  }
+  geo.computeVertexNormals();
+  return geo;
 }
 
 export interface FigureColors {
@@ -318,7 +149,7 @@ export interface FigureColors {
   patternColour?: number;
   chest?: number;
   shirt: number;
-  /** Contrast sleeves are a kit, not a pattern: the sleeve is its own instanced group. */
+  /** Contrast sleeves are a kit, not a pattern. */
   sleeve: number;
   shorts: number;
   sock: number;
@@ -334,25 +165,6 @@ export interface FigureColors {
   numberStyle?: number;
 }
 
-function tintOf(colors: FigureColors, tint: Tint): number {
-  switch (tint) {
-    case 'shirt':
-      return colors.shirt;
-    case 'sleeve':
-      return colors.sleeve;
-    case 'shorts':
-      return colors.shorts;
-    case 'sock':
-      return colors.sock;
-    case 'skin':
-      return colors.skin;
-    case 'hair':
-      return colors.hair;
-    case 'boot':
-      return colors.boot;
-  }
-}
-
 /**
  * All the figures on the pitch. `count` is fixed at construction; a figure that is not
  * currently needed is scaled to nothing rather than removed, because changing an
@@ -360,128 +172,130 @@ function tintOf(colors: FigureColors, tint: Tint): number {
  */
 export class FigureField {
   readonly group = new THREE.Group();
-  readonly #meshes = new Map<Limb, THREE.InstancedMesh>();
+  readonly #body: THREE.InstancedMesh;
+  readonly #hairMeshes: THREE.InstancedMesh[] = [];
   readonly #materials: THREE.Material[] = [];
   readonly #digits: THREE.Texture;
-  #pattern!: THREE.InstancedBufferAttribute;
-  #trim!: THREE.InstancedBufferAttribute;
-  #chest!: THREE.InstancedBufferAttribute;
-  #number!: THREE.InstancedBufferAttribute;
+  /** One row per figure: skinning matrices, then colours. */
+  readonly #data: Float32Array;
+  readonly #tex: THREE.DataTexture;
   readonly #count: number;
   /** Per-figure uniform scale, so a squad is not eleven identical men. */
   readonly #builds: Float32Array;
   /** Per-figure HAIR_STYLES index. */
   readonly #hair: Uint8Array;
+  /** The last pose's bone matrices per figure, root-relative, and each figure's root. */
+  readonly #posed: THREE.Matrix4[][];
+  readonly #roots: THREE.Matrix4[];
+  readonly #bones = BONES.map(() => new THREE.Matrix4());
+  readonly #scratch = poseScratch();
   readonly #m = new THREE.Matrix4();
   readonly #q = new THREE.Quaternion();
   readonly #e = new THREE.Euler();
   readonly #v = new THREE.Vector3();
   readonly #scale = new THREE.Vector3(1, 1, 1);
-  readonly #one = new THREE.Vector3(1, 1, 1);
-  readonly #zero = new THREE.Vector3(0, 0, 0);
   readonly #hidden = new THREE.Matrix4().makeScale(0, 0, 0);
   readonly #color = new THREE.Color();
-  /** Scratch matrices for the joint chain, so the hot path allocates nothing. */
-  readonly #root = new THREE.Matrix4();
-  readonly #body = new THREE.Matrix4();
-  readonly #hips = new THREE.Matrix4();
-  readonly #chain = new THREE.Matrix4();
-  readonly #torso = new THREE.Matrix4();
-  readonly #upper = new THREE.Matrix4();
-  readonly #knee = new THREE.Matrix4();
 
   constructor(count: number) {
     this.#count = count;
     this.#builds = new Float32Array(count).fill(1);
     this.#hair = new Uint8Array(count).fill(1);
+    this.#posed = Array.from({ length: count }, () => BONES.map(() => new THREE.Matrix4()));
+    this.#roots = Array.from({ length: count }, () => new THREE.Matrix4());
     this.group.name = 'figures';
     this.#digits = digitAtlas();
 
-    // One material per surface. Skin has a soft sheen and no more; hair is matte; boots are
-    // glossy synthetic; cloth gets the physical material's sheen lobe, which is the
-    // grazing-angle brightening that makes a shirt read as fabric rather than plastic.
-    const skin = smoothPaintMaterial(0.58);
-    const hair = smoothPaintMaterial(0.85);
-    const boot = smoothPaintMaterial(0.32);
-    const cloth = clothMaterial();
-    const torso = torsoMaterial(this.#digits);
-    this.#materials.push(skin, hair, boot, cloth, torso);
-    const surfaces: Record<Surface, THREE.Material> = { skin, hair, boot, cloth };
+    this.#data = new Float32Array(ROW * 4 * Math.max(1, count));
+    this.#tex = new THREE.DataTexture(this.#data, ROW, Math.max(1, count), THREE.RGBAFormat, THREE.FloatType);
+    this.#tex.magFilter = THREE.NearestFilter;
+    this.#tex.minFilter = THREE.NearestFilter;
+    this.#tex.needsUpdate = true;
 
-    for (const limb of LIMBS) {
-      const geo = buildLimbGeometry(limb);
-      if (limb === 'torso') {
-        // Per player: which pattern and its colour, the badge, and the number on the back.
-        this.#pattern = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
-        this.#trim = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
-        this.#chest = new THREE.InstancedBufferAttribute(new Float32Array(count * 4), 4);
-        this.#number = new THREE.InstancedBufferAttribute(new Float32Array(count * 4), 4);
-        geo.setAttribute('aTlPattern', this.#pattern);
-        geo.setAttribute('aTlTrim', this.#trim);
-        geo.setAttribute('aTlChest', this.#chest);
-        geo.setAttribute('aTlNumber', this.#number);
-      }
-      const material = limb === 'torso' ? torso : surfaces[LIMB_SURFACE[limb]];
-      const mesh = new THREE.InstancedMesh(geo, material, count * LIMB_COUNT[limb]);
-      mesh.name = `limb:${limb}`;
-      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      mesh.frustumCulled = false; // the pitch is always in view; culling a dozen meshes saves nothing
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-      this.#meshes.set(limb, mesh);
-      this.group.add(mesh);
-      // Everything starts hidden; setPose reveals a figure by giving it a real matrix.
-      for (let i = 0; i < mesh.count; i++) mesh.setMatrixAt(i, this.#hidden);
-      mesh.instanceMatrix.needsUpdate = true;
+    const { geometry, bind } = body();
+    const lines = kitLines(bind);
+    const material = bodyMaterial(this.#tex, this.#digits, lines);
+    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+    skinDepth(depth, this.#tex);
+    this.#materials.push(material, depth);
+
+    this.#body = new THREE.InstancedMesh(geometry, material, count);
+    this.#body.name = 'body';
+    this.#body.customDepthMaterial = depth;
+    this.#initMesh(this.#body);
+
+    // Hair is matte; it rides the head bone rigidly, as a haircut does.
+    const hairMat = smoothPaintMaterial(0.85);
+    this.#materials.push(hairMat);
+    for (const style of HAIR_STYLES) {
+      const mesh = new THREE.InstancedMesh(buildHair(style), hairMat, count);
+      mesh.name = `hair:${style}`;
+      this.#initMesh(mesh);
+      this.#hairMeshes.push(mesh);
     }
   }
 
-  /**
-   * Turn cast shadows on or off for every limb at once. Called by the tier governor: the
-   * shadow pass is the first thing a slow machine gives up.
-   */
-  setCastShadow(on: boolean): void {
-    for (const mesh of this.#meshes.values()) mesh.castShadow = on;
+  #initMesh(mesh: THREE.InstancedMesh): void {
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false; // the pitch is always in view; culling six meshes saves nothing
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    for (let i = 0; i < mesh.count; i++) mesh.setMatrixAt(i, this.#hidden);
+    mesh.instanceMatrix.needsUpdate = true;
+    this.group.add(mesh);
+  }
+
+  #meshes(): THREE.InstancedMesh[] {
+    return [this.#body, ...this.#hairMeshes];
   }
 
   /**
-   * Whether the figures take shadows as well as casting them. On for the tiers with a
-   * shadow map: a player's own arm shading his shirt is most of what makes him solid.
+   * Turn cast shadows on or off for every figure at once. Called by the tier governor: the
+   * shadow pass is the first thing a slow machine gives up.
    */
+  setCastShadow(on: boolean): void {
+    for (const mesh of this.#meshes()) mesh.castShadow = on;
+  }
+
+  /** Whether the figures take shadows as well as casting them: an arm shading a shirt. */
   setReceiveShadow(on: boolean): void {
-    for (const mesh of this.#meshes.values()) mesh.receiveShadow = on;
+    for (const mesh of this.#meshes()) mesh.receiveShadow = on;
   }
 
   /** Set one figure's kit, skin and hair. Cheap; call it when a team or a substitute changes. */
   setColors(index: number, colors: FigureColors): void {
-    for (const limb of LIMBS) {
-      const mesh = this.#meshes.get(limb);
-      if (!mesh) continue;
-      this.#color.setHex(tintOf(colors, LIMB_TINT[limb]));
-      const n = LIMB_COUNT[limb];
-      for (let k = 0; k < n; k++) mesh.setColorAt(index * n + k, this.#color);
+    if (index < 0 || index >= this.#count) return;
+    const put = (slot: number, hex: number, a = 1) => {
+      // setHex converts to the working (linear) space, so the kit is lit like everything else.
+      this.#color.setHex(hex);
+      const o = (index * ROW + slot) * 4;
+      this.#data[o] = this.#color.r;
+      this.#data[o + 1] = this.#color.g;
+      this.#data[o + 2] = this.#color.b;
+      this.#data[o + 3] = a;
+    };
+    put(COL.shirt, colors.shirt);
+    put(COL.sleeve, colors.sleeve);
+    put(COL.shorts, colors.shorts);
+    put(COL.sock, colors.sock);
+    put(COL.skin, colors.skin);
+    put(COL.boot, colors.boot);
+    put(COL.hair, colors.hair);
+    put(COL.trim, colors.patternColour ?? colors.shirt, colors.pattern ?? 0);
+    const chest = colors.chest ?? -1;
+    put(COL.chest, chest < 0 ? 0 : chest, chest < 0 ? 0 : 1);
+    // The number rides as (colour, number + style / 8): the style is the fraction.
+    const num = colors.number ?? 0;
+    const style = Math.max(0, Math.min(3, colors.numberStyle ?? 0));
+    put(COL.number, colors.numberColour ?? 0xffffff, num > 0 ? Math.min(99, num) + style / 8 : 0);
+    this.#tex.needsUpdate = true;
+
+    this.#color.setHex(colors.hair);
+    for (const mesh of this.#hairMeshes) {
+      mesh.setColorAt(index, this.#color);
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
-    if (index < 0 || index >= this.#count) return;
     this.#hair[index] = Math.max(0, Math.min(HAIR_STYLES.length - 1, colors.hairStyle ?? 1));
-    // setHex converts to the working (linear) space, exactly as setColorAt does, so the
-    // pattern is lit the same way as the shirt around it.
-    this.#pattern.setX(index, colors.pattern ?? 0);
-    this.#color.setHex(colors.patternColour ?? colors.shirt);
-    this.#trim.setXYZ(index, this.#color.r, this.#color.g, this.#color.b);
-    const chest = colors.chest ?? -1;
-    this.#color.setHex(chest < 0 ? 0 : chest);
-    this.#chest.setXYZW(index, this.#color.r, this.#color.g, this.#color.b, chest < 0 ? 0 : 1);
-    // The number rides as (colour.rgb, number + style / 8): the style is the fraction, so
-    // one vec4 carries all of it. Zero means no number.
-    const num = colors.number ?? 0;
-    this.#color.setHex(colors.numberColour ?? 0xffffff);
-    const style = Math.max(0, Math.min(3, colors.numberStyle ?? 0));
-    this.#number.setXYZW(index, this.#color.r, this.#color.g, this.#color.b, num > 0 ? Math.min(99, num) + style / 8 : 0);
-    this.#pattern.needsUpdate = true;
-    this.#trim.needsUpdate = true;
-    this.#chest.needsUpdate = true;
-    this.#number.needsUpdate = true;
   }
 
   /**
@@ -495,28 +309,20 @@ export class FigureField {
 
   /** Hide a figure entirely (a substituted player, or an unused slot). */
   hide(index: number): void {
-    for (const limb of LIMBS) {
-      const mesh = this.#meshes.get(limb);
-      if (!mesh) continue;
-      const n = LIMB_COUNT[limb];
-      for (let k = 0; k < n; k++) mesh.setMatrixAt(index * n + k, this.#hidden);
+    for (const mesh of this.#meshes()) {
+      mesh.setMatrixAt(index, this.#hidden);
       mesh.instanceMatrix.needsUpdate = true;
     }
   }
 
   /**
-   * Write one figure's limb matrices from a pose.
+   * Pose one figure.
    *
    * `x`/`z` are on the pitch plane in world units, `facing` is the heading in radians
-   * measured the same way the simulation measures it.
-   *
-   * Sign conventions, all measured in world space by figure.test.ts rather than asserted:
-   * positive `lean` tips the shoulders FORWARD, positive `headPitch` nods DOWN, positive
-   * `shoulderPitch` and `hipPitch` swing the limb forward, and positive `*Roll` takes a limb
-   * out from the body. Lean and head pitch were both applied with the opposite sign until
-   * that test existed, and every sprinter in the game ran leaning back.
+   * measured the same way the simulation measures it. Sign conventions are in body.ts.
    */
   setPose(index: number, x: number, z: number, facing: number, pose: Pose): void {
+    if (index < 0 || index >= this.#count) return;
     // Root: on the grass, turned to face, at this player's own size. The sim's facing is
     // measured from +X in its own 2D frame; the scene's forward for a figure is +Z, hence
     // the quarter turn.
@@ -525,222 +331,251 @@ export class FigureField {
     this.#v.set(x, 0, z);
     const build = this.#builds[index] as number;
     this.#scale.set(build, build, build);
-    this.#root.compose(this.#v, this.#q, this.#scale);
+    const root = (this.#roots[index] as THREE.Matrix4).compose(this.#v, this.#q, this.#scale);
 
-    // Body: lean and roll about the hips.
-    this.#e.set(pose.lean, 0, pose.roll);
-    this.#q.setFromEuler(this.#e);
-    this.#v.set(0, pose.hipY, 0);
-    this.#body.compose(this.#v, this.#q, this.#one);
-    this.#body.premultiply(this.#root);
+    poseBones(pose, this.#bones, this.#scratch);
+    const { bindInv } = body();
+    const posed = this.#posed[index] as THREE.Matrix4[];
+    for (let b = 0; b < BONE_COUNT; b++) {
+      const m = this.#bones[b] as THREE.Matrix4;
+      (posed[b] as THREE.Matrix4).copy(m);
+      this.#m.multiplyMatrices(m, bindInv[b] as THREE.Matrix4);
+      this.#data.set(this.#m.elements, (index * ROW + b * 4) * 4);
+    }
+    this.#body.setMatrixAt(index, root);
 
-    // Hips: the legs run along `legYaw`, which is not always where the chest is pointing.
-    this.#e.set(0, pose.legYaw, 0);
-    this.#q.setFromEuler(this.#e);
-    this.#hips.compose(this.#zero, this.#q, this.#one);
-    this.#hips.premultiply(this.#body);
-
-    // --- pelvis and torso ---
-    this.#setLimb('pelvis', index, 0, this.#hips);
-
-    // Torso hangs UP from the hips, twisted against them and bent at the upper spine.
-    this.#e.set(pose.chest, pose.twist, 0);
-    this.#q.setFromEuler(this.#e);
-    this.#v.set(0, RIG.torso, 0);
-    this.#chain.compose(this.#v, this.#q, this.#one);
-    this.#chain.premultiply(this.#body);
-    this.#torso.copy(this.#chain);
-    this.#setLimb('torso', index, 0, this.#torso);
-
-    // Head, hanging up off the shoulder line: yaw first, then the nod. Hair rides with it,
-    // and only this figure's own haircut gets a real matrix.
-    this.#e.set(pose.headPitch, pose.headYaw, 0, 'YXZ');
-    this.#q.setFromEuler(this.#e);
-    this.#e.order = 'XYZ';
-    this.#v.set(0, HEAD_JOINT_Y, 0);
-    this.#chain.compose(this.#v, this.#q, this.#one);
-    this.#chain.premultiply(this.#torso);
-    this.#setLimb('head', index, 0, this.#chain);
+    // Only this figure's own haircut gets a real matrix.
+    this.#m.multiplyMatrices(root, this.#bones[bone('head')] as THREE.Matrix4);
     const hair = this.#hair[index] as number;
     for (let h = 0; h < HAIR_STYLES.length; h++) {
-      this.#setLimb(HAIR_STYLES[h] as HairLimb, index, 0, h === hair ? this.#chain : this.#hidden);
-    }
-
-    // --- arms ---
-    for (let arm = 0; arm < 2; arm++) {
-      const side = arm === 0 ? -1 : 1;
-      // The Z term is how far the arms hang off the body. At 0.13 they hugged the torso
-      // and the figure read as armless from the broadcast angle; a footballer runs with
-      // daylight under his elbows. The pose adds its own abduction on top.
-      this.#e.set(-(pose.shoulderPitch[arm] as number), 0, side * (0.14 + (pose.shoulderRoll[arm] as number)));
-      this.#q.setFromEuler(this.#e);
-      this.#v.set((side * RIG.shoulderWidth) / 2, -0.05, 0);
-      this.#chain.compose(this.#v, this.#q, this.#one);
-      this.#chain.premultiply(this.#torso);
-      this.#upper.copy(this.#chain);
-      // Sleeve and bare arm share the shoulder joint exactly; two groups, one matrix.
-      this.#setLimb('sleeve', index, arm, this.#upper);
-      this.#setLimb('upperArm', index, arm, this.#upper);
-
-      // An elbow folds FORWARD. A knee folds backward, and both joints were being given
-      // the same +X rotation — so every figure ran with its forearms swinging out behind
-      // it, which is the pose of something that does not have elbows. Limbs extend down
-      // from their joint, and +X takes a down vector toward -Z, so the knee's sign is
-      // right and the elbow's is the negation of it.
-      this.#e.set(-(pose.elbowBend[arm] as number), 0, 0);
-      this.#q.setFromEuler(this.#e);
-      this.#v.set(0, -RIG.upperArm, 0);
-      this.#chain.compose(this.#v, this.#q, this.#one);
-      this.#chain.premultiply(this.#upper);
-      this.#setLimb('forearm', index, arm, this.#chain);
-    }
-
-    // --- legs ---
-    for (let leg = 0; leg < 2; leg++) {
-      const side = leg === 0 ? -1 : 1;
-      this.#e.set(-(pose.hipPitch[leg] as number), side * (pose.hipYaw[leg] as number), side * (pose.hipRoll[leg] as number));
-      this.#q.setFromEuler(this.#e);
-      this.#v.set((side * RIG.hipWidth) / 2, -0.02, 0);
-      this.#chain.compose(this.#v, this.#q, this.#one);
-      this.#chain.premultiply(this.#hips);
-      this.#upper.copy(this.#chain);
-      this.#setLimb('thigh', index, leg, this.#upper);
-      this.#setLimb('shortsLeg', index, leg, this.#upper);
-
-      // The knee bends the shin BACKWARD relative to the thigh, which is +X rotation
-      // given limbs that extend down and swing forward on -X.
-      this.#e.set(pose.kneeBend[leg] as number, 0, 0);
-      this.#q.setFromEuler(this.#e);
-      this.#v.set(0, -RIG.thigh, 0);
-      this.#chain.compose(this.#v, this.#q, this.#one);
-      this.#chain.premultiply(this.#upper);
-      this.#knee.copy(this.#chain);
-      this.#setLimb('shin', index, leg, this.#knee);
-      this.#setLimb('sock', index, leg, this.#knee);
-
-      this.#e.set(-(pose.anklePitch[leg] as number), 0, 0);
-      this.#q.setFromEuler(this.#e);
-      this.#v.set(0, -RIG.shin, 0);
-      this.#chain.compose(this.#v, this.#q, this.#one);
-      this.#chain.premultiply(this.#knee);
-      this.#setLimb('foot', index, leg, this.#chain);
+      (this.#hairMeshes[h] as THREE.InstancedMesh).setMatrixAt(index, h === hair ? this.#m : this.#hidden);
     }
   }
 
-  /** Push every changed matrix to the GPU. Called once per frame, after all setPose calls. */
+  /**
+   * Where one of a figure's joints is in the world after its last `setPose`: the bone's
+   * frame, joint at the origin, limb hanging down −Y. What the tests measure directions on.
+   */
+  jointMatrix(index: number, name: Bone, out = new THREE.Matrix4()): THREE.Matrix4 {
+    const posed = this.#posed[index] as THREE.Matrix4[];
+    return out.multiplyMatrices(this.#roots[index] as THREE.Matrix4, posed[bone(name)] as THREE.Matrix4);
+  }
+
+  /** Push this frame's poses to the GPU. Called once per frame, after all setPose calls. */
   flush(): void {
-    for (const mesh of this.#meshes.values()) mesh.instanceMatrix.needsUpdate = true;
+    for (const mesh of this.#meshes()) mesh.instanceMatrix.needsUpdate = true;
+    this.#tex.needsUpdate = true;
   }
 
   dispose(): void {
-    for (const mesh of this.#meshes.values()) {
-      mesh.geometry.dispose();
-      mesh.dispose();
-    }
+    // The body geometry is shared by every field on the page and outlives this one.
+    for (const mesh of this.#hairMeshes) mesh.geometry.dispose();
+    for (const mesh of this.#meshes()) mesh.dispose();
     for (const m of this.#materials) m.dispose();
+    this.#tex.dispose();
     this.#digits.dispose();
-    this.#meshes.clear();
+    this.#hairMeshes.length = 0;
+    this.group.clear();
   }
 
   get drawCalls(): number {
-    return this.#meshes.size;
+    return 1 + this.#hairMeshes.length;
   }
 
   get capacity(): number {
     return this.#count;
   }
 
-  #setLimb(limb: Limb, figure: number, which: number, matrix: THREE.Matrix4): void {
-    const mesh = this.#meshes.get(limb);
-    if (!mesh) return;
-    mesh.setMatrixAt(figure * LIMB_COUNT[limb] + which, matrix);
+  /** Triangles in one body, for the frame budget. */
+  static get bodyTriangles(): number {
+    const g = body().geometry;
+    return (g.index?.count ?? 0) / 3;
   }
 }
 
+// ---- shaders ---------------------------------------------------------------------------
+
+/** Shared GLSL: fetch this instance's skinning matrix for a bone. */
+const SKIN_HEAD = /* glsl */ `
+  uniform highp sampler2D tlFig;
+  attribute vec4 skinIndex;
+  attribute vec4 skinWeight;
+  mat4 tlBone(float b) {
+    int x = int(b + 0.5) * 4;
+    return mat4(
+      texelFetch(tlFig, ivec2(x, gl_InstanceID), 0),
+      texelFetch(tlFig, ivec2(x + 1, gl_InstanceID), 0),
+      texelFetch(tlFig, ivec2(x + 2, gl_InstanceID), 0),
+      texelFetch(tlFig, ivec2(x + 3, gl_InstanceID), 0));
+  }
+  mat4 tlSkinMatrix() {
+    return skinWeight.x * tlBone(skinIndex.x) + skinWeight.y * tlBone(skinIndex.y)
+         + skinWeight.z * tlBone(skinIndex.z) + skinWeight.w * tlBone(skinIndex.w);
+  }`;
+
+/** The shadow pass has to bend the same body, or a running player casts a statue's shadow. */
+function skinDepth(m: THREE.MeshDepthMaterial, tex: THREE.Texture): void {
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.tlFig = { value: tex };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n${SKIN_HEAD}`)
+      .replace('#include <begin_vertex>', `vec3 transformed = (tlSkinMatrix() * vec4(position, 1.0)).xyz;`);
+  };
+}
+
+const f = (n: number) => n.toFixed(4);
+
 /**
- * Kit fabric: vertex-painted, smooth, with a sheen lobe. Sheen is the physical material's
- * model of fibres catching light at grazing angles — the soft bright edge a shirt has
- * against a dark background and a plastic one does not.
+ * The body's material: physical, with the sheen lobe that makes cloth read as cloth, and
+ * four things the stock shader does not do.
+ *
+ * 1. Skinning, per instance, from the figure texture.
+ * 2. The kit, painted by bind-pose position: shirt, sleeve, shorts, sock, boot and skin.
+ * 3. The shirt's pattern, badge and number, in the torso's own coordinates, so a hoop
+ *    stays one hoop however the player twists (kitPattern.ts has the masks).
+ * 4. A face: eyes, brows in the hair's colour, lips a shade of the skin's own.
+ *
+ * Roughness and sheen follow the paint: skin has a soft sheen and no more, cloth gets the
+ * sheen lobe, boots are glossy synthetic.
  */
-function clothMaterial(): THREE.MeshPhysicalMaterial {
-  return new THREE.MeshPhysicalMaterial({
-    vertexColors: true,
-    roughness: 0.82,
+function bodyMaterial(tex: THREE.Texture, digits: THREE.Texture, k: ReturnType<typeof kitLines>): THREE.MeshPhysicalMaterial {
+  const m = new THREE.MeshPhysicalMaterial({
+    roughness: 0.8,
     metalness: 0,
     sheen: 0.55,
     sheenRoughness: 0.55,
     sheenColor: new THREE.Color(0xffffff),
   });
-}
-
-/**
- * The cloth material with three things added to the torso: the shirt pattern, evaluated
- * per pixel from the torso's own coordinates (src/render/kitPattern.ts has the masks and
- * the reasoning), a small badge on the left of the chest, and the number on the back.
- * Local coordinates, not UVs, because the torso is a lathe plus caps whose UVs have
- * nothing to do with the shirt — a hoop drawn in UV space would not be a hoop.
- *
- * The number samples `digitAtlas()`: ten digits across, one row per NUMBER_STYLES entry.
- * One digit sits centred; two sit side by side, each half the width. Seen from behind the
- * figure's +X is on the viewer's LEFT, so the tens digit goes on +X.
- */
-function torsoMaterial(digits: THREE.Texture): THREE.MeshPhysicalMaterial {
-  const m = clothMaterial();
+  const shoulderLine = k.collar - 0.012;
   m.onBeforeCompile = (shader) => {
+    shader.uniforms.tlFig = { value: tex };
     shader.uniforms.tlDigits = { value: digits };
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
-        attribute float aTlPattern;
-        attribute vec3 aTlTrim;
-        attribute vec4 aTlChest;
-        attribute vec4 aTlNumber;
-        varying float vTlPattern;
-        varying vec3 vTlTrim;
-        varying vec4 vTlChest;
-        varying vec4 vTlNumber;
-        varying vec3 vTlLocal;`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vTlPattern = aTlPattern;
-        vTlTrim = aTlTrim;
-        vTlChest = aTlChest;
-        vTlNumber = aTlNumber;
-        vTlLocal = position;`);
+        ${SKIN_HEAD}
+        attribute float aArm;
+        varying vec3 vTlBind;
+        varying float vTlArm;
+        flat varying int vTlInst;`)
+      .replace('#include <beginnormal_vertex>', `
+        mat4 tlSkin = tlSkinMatrix();
+        vec3 objectNormal = normalize(mat3(tlSkin) * normal);`)
+      .replace('#include <begin_vertex>', `
+        vec3 transformed = (tlSkin * vec4(position, 1.0)).xyz;
+        vTlBind = position;
+        vTlArm = aArm;
+        vTlInst = gl_InstanceID;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
+        uniform highp sampler2D tlFig;
         uniform sampler2D tlDigits;
-        varying float vTlPattern;
-        varying vec3 vTlTrim;
-        varying vec4 vTlChest;
-        varying vec4 vTlNumber;
-        varying vec3 vTlLocal;
+        varying vec3 vTlBind;
+        varying float vTlArm;
+        flat varying int vTlInst;
         ${PATTERN_GLSL}
+        vec4 tlCol(int slot) { return texelFetch(tlFig, ivec2(slot, vTlInst), 0); }
         float tlDigit(float d, float style, vec2 uv) {
           if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
           vec2 cell = vec2((d + uv.x) / 10.0, 1.0 - (style + uv.y) / 4.0);
           return texture2D(tlDigits, cell).a;
-        }`)
-      .replace('#include <color_fragment>', `#include <color_fragment>
-        vec2 tlQ = vec2(vTlLocal.x / ${TORSO_HALF_WIDTH.toFixed(3)}, -vTlLocal.y / ${TORSO_HEIGHT.toFixed(3)});
-        diffuseColor.rgb = mix(diffuseColor.rgb, vTlTrim, tlPatternMask(vTlPattern, tlQ));
-        if (vTlChest.w > 0.5 && vTlLocal.z > 0.08
-            && length(vTlLocal.xy - vec2(0.09, -0.14)) < 0.04) {
-          diffuseColor.rgb = vTlChest.rgb;
         }
-        if (vTlNumber.w > 0.5 && vTlLocal.z < -0.05) {
-          float num = floor(vTlNumber.w);
-          float style = floor(fract(vTlNumber.w) * 8.0 + 0.5);
-          // The number block: 0.3m tall, from 0.1m below the collar.
-          float nv = (-vTlLocal.y - 0.1) / 0.3;
-          float ink = 0.0;
-          if (num >= 10.0) {
-            float nu = (0.2 - vTlLocal.x) / 0.4;
-            ink = max(tlDigit(floor(num / 10.0), style, vec2(nu * 2.0, nv)),
-                      tlDigit(mod(num, 10.0), style, vec2(nu * 2.0 - 1.0, nv)));
-          } else {
-            ink = tlDigit(num, style, vec2((0.1 - vTlLocal.x) / 0.2, nv));
+        float tlEllipse(vec2 p, vec2 c, vec2 r) { return length((p - c) / r); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec3 p = vTlBind;
+        // 0 skin, 1 shirt, 2 sleeve, 3 shorts, 4 sock, 5 boot.
+        int region = 0;
+        if (vTlArm > 0.5) {
+          vec3 s = vec3(${f(k.shoulder.x)}, ${f(k.shoulder.y)}, ${f(k.shoulder.z)});
+          vec3 d = vec3(${f(k.armDir.x)}, ${f(k.armDir.y)}, ${f(k.armDir.z)});
+          float t = dot(vec3(abs(p.x), p.y, p.z) - s, d);
+          region = t < ${f(SLEEVE)} ? 2 : 0;
+        } else {
+          // A round neck, cut a little lower at the front: skin inside the neckline's ring,
+          // shirt outside it — the trapezius rises above the collar and is still shirt.
+          float collar = ${f(k.collar)} - 0.028 * smoothstep(0.01, 0.08, p.z);
+          bool neck = length(vec2(p.x, (p.z + 0.012) * 1.1)) < 0.078;
+          if (p.y > ${f(k.collar + 0.05)} || (p.y > collar && neck)) region = 0;
+          else if (p.y > ${f(k.shirtHem)}) region = 1;
+          else if (p.y > ${f(k.shortsHem)}) region = 3;
+          else if (p.y > ${f(k.sockTop)}) region = 0;
+          else if (p.y > ${f(k.bootTop)}) region = 4;
+          else region = 5;
+        }
+        vec3 tint = tlCol(${COL.skin}).rgb;
+        float tlRough = 0.55;
+        float tlCloth = 0.0;
+        if (region == 1) { tint = tlCol(${COL.shirt}).rgb; tlRough = 0.82; tlCloth = 1.0; }
+        else if (region == 2) { tint = tlCol(${COL.sleeve}).rgb; tlRough = 0.82; tlCloth = 1.0; }
+        else if (region == 3) { tint = tlCol(${COL.shorts}).rgb; tlRough = 0.78; tlCloth = 1.0; }
+        else if (region == 4) {
+          tint = tlCol(${COL.sock}).rgb; tlRough = 0.9; tlCloth = 1.0;
+          // Ribbing at the turned-over top of the sock.
+          float rib = step(${f(k.sockTop - 0.03)}, p.y);
+          tint *= 1.0 - rib * 0.12 * step(0.5, fract(atan(p.z, abs(p.x) - 0.12) * 14.0));
+        }
+        else if (region == 5) {
+          tint = tlCol(${COL.boot}).rgb; tlRough = 0.32;
+          // A darker sole with studs' shadow, and the stripe down the side every boot has.
+          if (p.y < ${f(k.sole)}) tint *= 0.3;
+          float stripe = abs(abs(p.x) - 0.165) < 0.03 && p.y > ${f(k.sole + 0.012)} && p.y < ${f(k.sole + 0.03)} ? 1.0 : 0.0;
+          tint = mix(tint, vec3(1.0) - tint * 0.6, stripe * 0.55);
+        }
+
+        if (region == 1) {
+          // The shirt, in the torso's own frame: origin on the shoulder line.
+          vec3 L = p - vec3(0.0, ${f(shoulderLine)}, 0.0);
+          vec4 trim = tlCol(${COL.trim});
+          vec2 tlQ = vec2(L.x / ${f(TORSO_HALF_WIDTH)}, max(0.0, -L.y) / ${f(TORSO_HEIGHT)});
+          tint = mix(tint, trim.rgb, tlPatternMask(trim.a, tlQ));
+          vec4 badge = tlCol(${COL.chest});
+          if (badge.a > 0.5 && L.z > 0.06 && length(L.xy - vec2(0.085, -0.13)) < 0.036) tint = badge.rgb;
+          vec4 number = tlCol(${COL.number});
+          if (number.a > 0.5 && L.z < -0.05) {
+            float num = floor(number.a);
+            float style = floor(fract(number.a) * 8.0 + 0.5);
+            float nv = (-L.y - 0.1) / 0.28;
+            float ink = 0.0;
+            if (num >= 10.0) {
+              float nu = (0.19 - L.x) / 0.38;
+              ink = max(tlDigit(floor(num / 10.0), style, vec2(nu * 2.0, nv)),
+                        tlDigit(mod(num, 10.0), style, vec2(nu * 2.0 - 1.0, nv)));
+            } else {
+              ink = tlDigit(num, style, vec2((0.095 - L.x) / 0.19, nv));
+            }
+            tint = mix(tint, number.rgb, ink);
           }
-          diffuseColor.rgb = mix(diffuseColor.rgb, vTlNumber.rgb, ink);
-        }`);
+          // A darker band at the collar and the hem, where a real shirt is double-stitched.
+          tint *= 1.0 - 0.18 * (1.0 - smoothstep(0.0, 0.012, ${f(k.collar)} - p.y))
+                      - 0.1 * (1.0 - smoothstep(0.0, 0.01, p.y - ${f(k.shirtHem)}));
+        }
+
+        if (region == 0 && p.y > ${f(k.collar + 0.06)}) {
+          // The face, in the skull's frame.
+          vec3 q = p - vec3(${f(k.skull.x)}, ${f(k.skull.y)}, ${f(k.skull.z)});
+          if (q.z > 0.05) {
+            vec2 e = vec2(abs(q.x), q.y);
+            float eye = tlEllipse(e, vec2(0.031, 0.009), vec2(0.013, 0.0065));
+            if (eye < 1.0) tint = mix(vec3(0.85, 0.82, 0.78) * tint * 1.3, vec3(0.05, 0.04, 0.035), step(tlEllipse(e, vec2(0.031, 0.009), vec2(0.0065, 0.0065)), 1.0));
+            // Lashes and the lid's shadow: a dark line along the top of the eye.
+            if (abs(eye - 1.0) < 0.28 && e.y > 0.009) tint *= 0.45;
+            // Brows, in the hair's colour, rising slightly to the outside.
+            // Thickest at the inner end, tapering out and arching over the eye.
+            float bu = (e.x - 0.012) / 0.04;
+            float by = 0.026 + 0.005 * sin(bu * 3.1416) - bu * 0.002;
+            if (bu > 0.0 && bu < 1.0 && abs(e.y - by) < 0.0042 * (1.0 - bu * 0.55)) tint = mix(tint, tlCol(${COL.hair}).rgb, 0.8);
+            // Lips: the skin's own colour, deeper and redder.
+            float lip = tlEllipse(e, vec2(0.0, -0.058), vec2(0.022, 0.0075));
+            if (lip < 1.0) tint *= vec3(0.78, 0.58, 0.56);
+            if (abs(e.y + 0.058) < 0.0012 && e.x < 0.02) tint *= 0.55;
+          }
+        }
+        diffuseColor.rgb = tint;`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = tlRough;`)
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+        #ifdef USE_SHEEN
+          material.sheenColor *= tlCloth;
+        #endif`);
   };
   return m;
 }

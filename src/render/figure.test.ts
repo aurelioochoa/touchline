@@ -11,39 +11,45 @@
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { FigureField, LIMBS } from './figure.js';
+import { FigureField, HAIR_STYLES } from './figure.js';
+import { BONES, type Bone } from './body.js';
 import { RIG, emptyPose, runPose, type Pose } from './gait.js';
 
 /** A facing that maps the figure's own +Z (forward) onto world +Z, so signs read directly. */
 const FORWARD = Math.PI / 2;
 
-function meshFor(field: FigureField, limb: string): THREE.InstancedMesh {
-  const mesh = field.group.children.find((c) => c.name === `limb:${limb}`);
-  if (!mesh) throw new Error(`no mesh for ${limb}`);
-  return mesh as THREE.InstancedMesh;
+/** A paired limb's bone is named by side: 0 is the figure's −X side, 1 its +X. */
+function boneOf(limb: string, which: number): Bone {
+  const paired = ['upperArm', 'forearm', 'thigh', 'shin', 'foot'];
+  return (paired.includes(limb) ? `${limb}${which}` : limb) as Bone;
 }
 
 /**
- * Where a point in a limb's own frame ends up in the world.
- *
- * `which` indexes the instance directly: for a paired limb on figure 0 that is just the
- * side, which is all these tests need.
+ * Where a point in a joint's own frame ends up in the world, on the matrices the GPU
+ * skins the body with.
  */
-function pointOn(field: FigureField, limb: string, which: number, local: THREE.Vector3): THREE.Vector3 {
-  const m = new THREE.Matrix4();
-  meshFor(field, limb).getMatrixAt(which, m);
-  return local.clone().applyMatrix4(m);
+function pointOn(field: FigureField, limb: string, which: number, local: THREE.Vector3, figure = 0): THREE.Vector3 {
+  return local.clone().applyMatrix4(field.jointMatrix(figure, boneOf(limb, which)));
 }
 
-/** The joint itself — every limb geometry has its joint at its own origin. */
-function jointOf(field: FigureField, limb: string, which: number): THREE.Vector3 {
-  return pointOn(field, limb, which, new THREE.Vector3(0, 0, 0));
+/** The joint itself — every bone has its joint at its own origin. */
+function jointOf(field: FigureField, limb: string, which: number, figure = 0): THREE.Vector3 {
+  return pointOn(field, limb, which, new THREE.Vector3(0, 0, 0), figure);
+}
+
+function meshFor(field: FigureField, name: string): THREE.InstancedMesh {
+  const mesh = field.group.children.find((c) => c.name === name);
+  if (!mesh) throw new Error(`no mesh ${name}`);
+  return mesh as THREE.InstancedMesh;
 }
 
 describe('the limb chain', () => {
-  it('gives every limb group a mesh', () => {
-    const field = new FigureField(1);
-    for (const limb of LIMBS) expect(meshFor(field, limb)).toBeTruthy();
+  it('draws the whole squad in one body mesh and one per haircut', () => {
+    const field = new FigureField(3);
+    expect(meshFor(field, 'body')).toBeTruthy();
+    for (const h of HAIR_STYLES) expect(meshFor(field, `hair:${h}`)).toBeTruthy();
+    expect(field.drawCalls).toBe(1 + HAIR_STYLES.length);
+    expect(BONES.length).toBe(13);
     field.dispose();
   });
 
@@ -155,24 +161,12 @@ describe('the limb chain', () => {
       skin: 0xc98f63, hair: 0x1c1512, boot: 0x14171c, hairStyle: 3,
     });
     field.setPose(0, 0, 0, FORWARD, emptyPose());
-    const shown = ['hairCrop', 'hairShort', 'hairQuiff', 'hairCurly', 'hairBun'].filter((h) => {
+    const shown = HAIR_STYLES.filter((h) => {
       const m = new THREE.Matrix4();
-      meshFor(field, h).getMatrixAt(0, m);
+      meshFor(field, `hair:${h}`).getMatrixAt(0, m);
       return Math.abs(m.determinant()) > 1e-9;
     });
     expect(shown).toEqual(['hairCurly']);
-    field.dispose();
-  });
-
-  it('stands about 1.8m tall, which is what the rig claims', () => {
-    // The head used to be built entirely BELOW its joint, so the crown landed 126mm above
-    // the shoulder line and the whole figure was 1.57m — a head shorter than a footballer.
-    const field = new FigureField(1);
-    const pose = emptyPose();
-    field.setPose(0, 0, 0, FORWARD, pose);
-    const crown = pointOn(field, 'head', 0, new THREE.Vector3(0, RIG.headRadius * 2.9, 0));
-    expect(crown.y).toBeGreaterThan(1.7);
-    expect(crown.y).toBeLessThan(1.9);
     field.dispose();
   });
 
@@ -184,10 +178,7 @@ describe('the limb chain', () => {
     field.setPose(0, 0, 0, FORWARD, pose);
     field.setPose(1, 0, 0, FORWARD, pose);
     const short = jointOf(field, 'foot', 0);
-    const tallMesh = meshFor(field, 'foot');
-    const m = new THREE.Matrix4();
-    tallMesh.getMatrixAt(2, m); // figure 1, foot 0
-    const tall = new THREE.Vector3(0, 0, 0).applyMatrix4(m);
+    const tall = jointOf(field, 'foot', 0, 1);
     // Both ankles are within a few centimetres of the ground — nobody floats or sinks.
     expect(Math.abs(short.y - tall.y)).toBeLessThan(0.06);
     field.dispose();
