@@ -10,6 +10,7 @@ import { PITCH_LENGTH, PITCH_WIDTH } from '../sim/match/pitch.js';
 import { concreteTexture, crowdTexture, glazingTextures, roofSheetTexture } from './textures.js';
 import { SURROUND } from './pitch.js';
 import { Ultras, type Rake } from './ultras.js';
+import { Crowd } from './crowd.js';
 
 /**
  * The bowl, in metres. These are not free numbers: `camera.ts` places every preset
@@ -66,6 +67,14 @@ export interface StadiumColors {
   name?: string;
 }
 
+/** How much of the ground is modelled rather than painted (settings: graphics). */
+export interface StadiumOptions {
+  /** 0..1: the share of seats with a modelled spectator in them. 0 paints the crowd instead. */
+  crowd?: number;
+  /** Flares, smoke, paper and camera flashes. */
+  fx?: boolean;
+}
+
 export class Stadium {
   readonly group = new THREE.Group();
   readonly #disposables: { dispose(): void }[] = [];
@@ -102,9 +111,13 @@ export class Stadium {
   #waveLen = 6;
   /** The home end's barra, and the ground's cameras and signs (ultras.ts). */
   readonly #ultras: Ultras;
+  /** Every seat's spectator, when the crowd is modelled (crowd.ts). */
+  #crowd: Crowd | null = null;
+  readonly #crowdDensity: number;
 
-  constructor(seed: number, colors: StadiumColors = { primary: 0x2f8f43, secondary: 0xffffff }) {
+  constructor(seed: number, colors: StadiumColors = { primary: 0x2f8f43, secondary: 0xffffff }, opts: StadiumOptions = {}) {
     this.group.name = 'stadium';
+    this.#crowdDensity = Math.max(0, Math.min(1, opts.crowd ?? 0));
 
     const concreteTex = concreteTexture();
     const concrete = new THREE.MeshStandardMaterial({ color: 0xa3abb4, roughness: 0.94, map: concreteTex });
@@ -184,8 +197,24 @@ export class Stadium {
       ...(colors.name ? { name: colors.name } : {}),
       home: rakes[6] as Rake,
       rakes,
+      people: this.#crowdDensity > 0,
+      fx: opts.fx ?? true,
     });
     this.group.add(this.#ultras.group);
+    if (this.#crowdDensity > 0) {
+      this.#crowd = new Crowd({
+        seed,
+        primary: colors.primary,
+        secondary: colors.secondary,
+        density: this.#crowdDensity,
+        rakes,
+        tile: CROWD_TILE,
+        // The barra's own terrace is modelled by ultras.ts.
+        exclude: { rake: rakes[6] as Rake, halfWidth: 13.6 },
+        uniforms: this.#crowdUniforms,
+      });
+      this.group.add(this.#crowd.group);
+    }
 
     // The corners. Four rectangular stands leave four diagonal holes with sky behind them,
     // and a hole in a stadium reads as a mistake from every camera angle that catches one.
@@ -362,12 +391,13 @@ export class Stadium {
   dispose(): void {
     for (const d of this.#disposables) d.dispose();
     this.#ultras.dispose();
+    this.#crowd?.dispose();
     this.group.clear();
   }
 
   // ---- pieces -----------------------------------------------------------------
 
-  #crowdMaterial(width: number, rake: number, seed: number, colors: StadiumColors, shade: number): THREE.MeshStandardMaterial {
+  #crowdMaterial(width: number, rake: number, seed: number, colors: StadiumColors, shade: number, empty = false): THREE.MeshStandardMaterial {
     // Each stand gets its own sheet so the people come out the same size on a 119-metre
     // side stand and an 82-metre end. Sharing one un-repeated texture stretches thirty
     // spectators across the whole length of the pitch.
@@ -375,7 +405,7 @@ export class Stadium {
     // Three sheets per tier, shared round the ground: each material takes a clone, and a
     // clone shares its canvas and its GPU upload, so this is three textures a tier rather
     // than sixteen megabyte-sized ones.
-    const key = `${rows}|${shade}|${seed % 3}`;
+    const key = `${rows}|${shade}|${seed % 3}|${empty ? 'empty' : 'full'}`;
     let sheet = this.#sheets.get(key);
     if (!sheet) {
       sheet = crowdTexture({
@@ -387,6 +417,7 @@ export class Stadium {
         primary: colors.primary,
         secondary: colors.secondary,
         shade,
+        empty,
       });
       this.#sheets.set(key, sheet);
       this.#disposables.push(sheet);
@@ -411,7 +442,8 @@ export class Stadium {
     const mat = new THREE.MeshStandardMaterial({
       map: tex, roughness: 1, metalness: 0, side: THREE.DoubleSide,
     });
-    this.#liveCrowd(mat, tex.repeat.x, rows);
+    // Empty seats do not bob, wave or take photographs: the people on them do that.
+    if (!empty) this.#liveCrowd(mat, tex.repeat.x, rows);
     this.#crowdMats.push(mat);
     this.#disposables.push(tex, mat);
     return mat;
@@ -630,12 +662,13 @@ export class Stadium {
     // The lower tier, the glazed boxes, the parapet with its LED ribbon, the upper tier.
     const lowTop = WALL_HEIGHT + LOWER_RISE;
     const lowRake = Math.hypot(LOWER_DEPTH, LOWER_RISE);
-    this.#rake(stand, this.#crowdMaterial(width, lowRake, seed, colors, 0.25), width, 0, WALL_HEIGHT, LOWER_DEPTH, lowTop);
+    const modelled = this.#crowdDensity > 0;
+    this.#rake(stand, this.#crowdMaterial(width, lowRake, seed, colors, 0.25, modelled), width, 0, WALL_HEIGHT, LOWER_DEPTH, lowTop);
     this.#strip(stand, this.#glassMaterial(seed ^ 0x9e37), width / 2, LOWER_DEPTH, -width / 2, LOWER_DEPTH, lowTop, BOX_GLASS, GLASS_TILE);
     this.#strip(stand, p.led, width / 2, LOWER_DEPTH - 0.02, -width / 2, LOWER_DEPTH - 0.02, lowTop + BOX_GLASS, BOX_PARAPET, LED_TILE);
     const upTop = WALL_HEIGHT + STAND_HEIGHT;
     const upRake = Math.hypot(STAND_DEPTH - LOWER_DEPTH, upTop - UPPER_FRONT);
-    this.#rake(stand, this.#crowdMaterial(width, upRake, seed + 101, colors, 1), width, LOWER_DEPTH, UPPER_FRONT, STAND_DEPTH, upTop);
+    this.#rake(stand, this.#crowdMaterial(width, upRake, seed + 101, colors, 1, modelled), width, LOWER_DEPTH, UPPER_FRONT, STAND_DEPTH, upTop);
 
     // A roof over the back, which is what gives a stadium its silhouette. Over the back
     // only: a roof that reaches further forward hides the crowd from any camera above it,

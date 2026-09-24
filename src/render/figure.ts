@@ -23,13 +23,13 @@
 // hem is a crisp line however coarse the mesh, and one mesh serves every kit.
 
 import * as THREE from 'three';
-import { ellipsoid, mergeParts, smoothPaintMaterial } from './kit.js';
+import { ellipsoid, mergeParts } from './kit.js';
 import { type Pose } from './gait.js';
 import { PATTERN_GLSL, TORSO_HALF_WIDTH, TORSO_HEIGHT } from './kitPattern.js';
 import { digitAtlas } from './textures.js';
 import { sculpt } from './sculpt.js';
 import {
-  BODY_MAX, BODY_MIN, BONE_COUNT, BONES, SKULL_Y, SLEEVE,
+  BODY_MAX, BODY_MIN, BONE_COUNT, BONES, EYE_R, EYE_X, EYE_Y, EYE_Z, SKULL_Y, SLEEVE,
   bindMatrices, bodyVolumes, bone, kitLines, poseBones, poseScratch, type Bone,
 } from './body.js';
 
@@ -41,7 +41,7 @@ import {
 export const HAIR_STYLES = ['hairCrop', 'hairShort', 'hairQuiff', 'hairCurly', 'hairBun'] as const;
 type HairStyle = (typeof HAIR_STYLES)[number];
 
-/** Grid spacing the body is sculpted at. Finer is smoother and costs triangles. */
+/** Grid spacing the body is sculpted at, unless the quality tier asks for another (tiers.ts). */
 const BODY_CELL = 0.013;
 
 /**
@@ -62,18 +62,25 @@ const COL = {
   chest: BONE_COUNT * 4 + 8,
   /** rgb: the number's colour; a: number + style / 8, or 0 for none. */
   number: BONE_COUNT * 4 + 9,
+  /** rgb: the iris. */
+  iris: BONE_COUNT * 4 + 10,
 } as const;
 const ROW = 64;
 
-/** Built once per page: sculpting takes a few hundred milliseconds and the body never changes. */
-let shared: { geometry: THREE.BufferGeometry; bind: THREE.Matrix4[]; bindInv: THREE.Matrix4[] } | null = null;
-function body() {
-  if (!shared) {
-    const bind = bindMatrices();
-    const { geometry } = sculpt({ bind, volumes: bodyVolumes(bind), cell: BODY_CELL, min: BODY_MIN, max: BODY_MAX });
-    shared = { geometry, bind, bindInv: bind.map((m) => m.clone().invert()) };
+/**
+ * Built once per page and resolution: sculpting takes a few hundred milliseconds and the
+ * body never changes. The bind pose is the same at every resolution.
+ */
+const shared = new Map<number, THREE.BufferGeometry>();
+const bind = bindMatrices();
+const bindInv = bind.map((m) => m.clone().invert());
+function body(cell = BODY_CELL) {
+  let geometry = shared.get(cell);
+  if (!geometry) {
+    geometry = sculpt({ bind, volumes: bodyVolumes(bind), cell, min: BODY_MIN, max: BODY_MAX }).geometry;
+    shared.set(cell, geometry);
   }
-  return shared;
+  return { geometry, bind, bindInv };
 }
 
 /**
@@ -163,6 +170,10 @@ export interface FigureColors {
   /** Its colour, and a NUMBER_STYLES index for how it is set. */
   numberColour?: number;
   numberStyle?: number;
+  /** 0..1: how much stubble or beard, in the hair's colour. */
+  beard?: number;
+  /** The colour of his eyes. */
+  eyes?: number;
 }
 
 /**
@@ -197,7 +208,8 @@ export class FigureField {
   readonly #hidden = new THREE.Matrix4().makeScale(0, 0, 0);
   readonly #color = new THREE.Color();
 
-  constructor(count: number) {
+  /** `cell` is the sculpting grid (tiers.ts `bodyCell`): the players' level of detail. */
+  constructor(count: number, cell = BODY_CELL) {
     this.#count = count;
     this.#builds = new Float32Array(count).fill(1);
     this.#hair = new Uint8Array(count).fill(1);
@@ -212,7 +224,7 @@ export class FigureField {
     this.#tex.minFilter = THREE.NearestFilter;
     this.#tex.needsUpdate = true;
 
-    const { geometry, bind } = body();
+    const { geometry } = body(cell);
     const lines = kitLines(bind);
     const material = bodyMaterial(this.#tex, this.#digits, lines);
     const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
@@ -225,7 +237,7 @@ export class FigureField {
     this.#initMesh(this.#body);
 
     // Hair is matte; it rides the head bone rigidly, as a haircut does.
-    const hairMat = smoothPaintMaterial(0.85);
+    const hairMat = hairMaterial();
     this.#materials.push(hairMat);
     for (const style of HAIR_STYLES) {
       const mesh = new THREE.InstancedMesh(buildHair(style), hairMat, count);
@@ -280,7 +292,8 @@ export class FigureField {
     put(COL.sock, colors.sock);
     put(COL.skin, colors.skin);
     put(COL.boot, colors.boot);
-    put(COL.hair, colors.hair);
+    put(COL.hair, colors.hair, colors.beard ?? 0);
+    put(COL.iris, colors.eyes ?? 0x4a2f1c);
     put(COL.trim, colors.patternColour ?? colors.shirt, colors.pattern ?? 0);
     const chest = colors.chest ?? -1;
     put(COL.chest, chest < 0 ? 0 : chest, chest < 0 ? 0 : 1);
@@ -334,7 +347,6 @@ export class FigureField {
     const root = (this.#roots[index] as THREE.Matrix4).compose(this.#v, this.#q, this.#scale);
 
     poseBones(pose, this.#bones, this.#scratch);
-    const { bindInv } = body();
     const posed = this.#posed[index] as THREE.Matrix4[];
     for (let b = 0; b < BONE_COUNT; b++) {
       const m = this.#bones[b] as THREE.Matrix4;
@@ -387,8 +399,8 @@ export class FigureField {
   }
 
   /** Triangles in one body, for the frame budget. */
-  static get bodyTriangles(): number {
-    const g = body().geometry;
+  static bodyTriangles(cell = BODY_CELL): number {
+    const g = body(cell).geometry;
     return (g.index?.count ?? 0) / 3;
   }
 }
@@ -479,7 +491,23 @@ function bodyMaterial(tex: THREE.Texture, digits: THREE.Texture, k: ReturnType<t
           vec2 cell = vec2((d + uv.x) / 10.0, 1.0 - (style + uv.y) / 4.0);
           return texture2D(tlDigits, cell).a;
         }
-        float tlEllipse(vec2 p, vec2 c, vec2 r) { return length((p - c) / r); }`)
+        float tlEllipse(vec2 p, vec2 c, vec2 r) { return length((p - c) / r); }
+        float tlHash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+        float tlNoise(vec3 p) {
+          vec3 i = floor(p); vec3 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(mix(tlHash3(i), tlHash3(i + vec3(1, 0, 0)), f.x), mix(tlHash3(i + vec3(0, 1, 0)), tlHash3(i + vec3(1, 1, 0)), f.x), f.y),
+                     mix(mix(tlHash3(i + vec3(0, 0, 1)), tlHash3(i + vec3(1, 0, 1)), f.x), mix(tlHash3(i + vec3(0, 1, 1)), tlHash3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+        }
+        // Bump from a height field in metres: Mikkelsen's surface-gradient trick, the same
+        // maths three.js's bump map uses, without a texture.
+        vec3 tlBump(vec3 pos, vec3 n, float h) {
+          vec3 dpx = dFdx(pos); vec3 dpy = dFdy(pos);
+          float dhx = dFdx(h); float dhy = dFdy(h);
+          vec3 r1 = cross(dpy, n); vec3 r2 = cross(n, dpx);
+          float det = dot(dpx, r1);
+          vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+          return normalize(abs(det) * n - grad);
+        }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec3 p = vTlBind;
         // 0 skin, 1 shirt, 2 sleeve, 3 shorts, 4 sock, 5 boot.
@@ -492,9 +520,12 @@ function bodyMaterial(tex: THREE.Texture, digits: THREE.Texture, k: ReturnType<t
         } else {
           // A round neck, cut a little lower at the front: skin inside the neckline's ring,
           // shirt outside it — the trapezius rises above the collar and is still shirt.
-          float collar = ${f(k.collar)} - 0.028 * smoothstep(0.01, 0.08, p.z);
-          bool neck = length(vec2(p.x, (p.z + 0.012) * 1.1)) < 0.078;
-          if (p.y > ${f(k.collar + 0.05)} || (p.y > collar && neck)) region = 0;
+          // The neckline rises steeply away from the neck, so the trapezius beside it stays
+          // shirt: a height that depends on the distance from the neck, not a cylinder that
+          // the surface grazes and frays against.
+          float fromNeck = length(vec2(p.x, (p.z + 0.012) * 1.1));
+          float collar = ${f(k.collar)} - 0.028 * smoothstep(0.01, 0.08, p.z) + 0.9 * max(0.0, fromNeck - 0.058);
+          if (p.y > collar) region = 0;
           else if (p.y > ${f(k.shirtHem)}) region = 1;
           else if (p.y > ${f(k.shortsHem)}) region = 3;
           else if (p.y > ${f(k.sockTop)}) region = 0;
@@ -549,33 +580,131 @@ function bodyMaterial(tex: THREE.Texture, digits: THREE.Texture, k: ReturnType<t
                       - 0.1 * (1.0 - smoothstep(0.0, 0.01, p.y - ${f(k.shirtHem)}));
         }
 
+        // Skin is never one flat colour: a faint mottle, and the blood under it.
+        float tlSkinMask = region == 0 ? 1.0 : 0.0;
+        if (region == 0) tint *= 0.95 + 0.1 * tlNoise(p * 90.0);
         if (region == 0 && p.y > ${f(k.collar + 0.06)}) {
           // The face, in the skull's frame.
           vec3 q = p - vec3(${f(k.skull.x)}, ${f(k.skull.y)}, ${f(k.skull.z)});
-          if (q.z > 0.05) {
-            vec2 e = vec2(abs(q.x), q.y);
-            float eye = tlEllipse(e, vec2(0.031, 0.009), vec2(0.013, 0.0065));
-            if (eye < 1.0) tint = mix(vec3(0.85, 0.82, 0.78) * tint * 1.3, vec3(0.05, 0.04, 0.035), step(tlEllipse(e, vec2(0.031, 0.009), vec2(0.0065, 0.0065)), 1.0));
-            // Lashes and the lid's shadow: a dark line along the top of the eye.
-            if (abs(eye - 1.0) < 0.28 && e.y > 0.009) tint *= 0.45;
-            // Brows, in the hair's colour, rising slightly to the outside.
-            // Thickest at the inner end, tapering out and arching over the eye.
-            float bu = (e.x - 0.012) / 0.04;
-            float by = 0.026 + 0.005 * sin(bu * 3.1416) - bu * 0.002;
-            if (bu > 0.0 && bu < 1.0 && abs(e.y - by) < 0.0042 * (1.0 - bu * 0.55)) tint = mix(tint, tlCol(${COL.hair}).rgb, 0.8);
-            // Lips: the skin's own colour, deeper and redder.
-            float lip = tlEllipse(e, vec2(0.0, -0.058), vec2(0.022, 0.0075));
-            if (lip < 1.0) tint *= vec3(0.78, 0.58, 0.56);
-            if (abs(e.y + 0.058) < 0.0012 && e.x < 0.02) tint *= 0.55;
+          vec2 e = vec2(abs(q.x), q.y);
+          // Warmer where the blood is close: the nose, the cheeks, the ears, the lips.
+          float flush = max(max(1.0 - length(q - vec3(0.0, -0.034, 0.1)) / 0.022,
+                                1.0 - length(vec3(e.x - 0.045, q.y + 0.03, q.z - 0.07)) / 0.028),
+                            smoothstep(0.068, 0.08, e.x) * step(-0.04, q.y) * step(q.y, 0.03));
+          tint *= mix(vec3(1.0), vec3(1.04, 0.88, 0.86), clamp(flush, 0.0, 1.0) * 0.55);
+          // Stubble on the jaw, the chin and the upper lip, in the hair's colour, for the
+          // ones who have it — speckled, because a beard is hairs rather than paint.
+          vec4 hairCol = tlCol(${COL.hair});
+          float jaw = smoothstep(-0.012, -0.042, q.y) * smoothstep(-0.14, -0.112, q.y) * smoothstep(-0.045, -0.01, q.z)
+                    * (1.0 - smoothstep(0.055, 0.075, e.x) * smoothstep(-0.07, -0.03, q.y));
+          float moustache = smoothstep(0.026, 0.018, e.x) * smoothstep(-0.052, -0.049, q.y) * smoothstep(-0.038, -0.043, q.y) * step(0.08, q.z);
+          float stubble = hairCol.a * max(jaw, moustache) * (0.5 + 0.5 * tlNoise(p * 900.0));
+          tint = mix(tint, hairCol.rgb * 0.9 + tint * 0.1, stubble * 0.6);
+          // The eyes: white, iris, pupil, painted on the sculpted eyeball — and wet, so
+          // they catch the light, which is what makes a face look alive.
+          vec3 d = vec3(e.x - ${f(EYE_X)}, q.y - ${f(EYE_Y)}, q.z - ${f(EYE_Z)});
+          if (length(d) < ${f(EYE_R * 1.12)} && d.z > 0.0) {
+            float r = length(d.xy);
+            vec3 sclera = vec3(0.88, 0.85, 0.8) * (0.7 + 0.3 * smoothstep(0.008, -0.002, d.y));
+            vec3 iris = tlCol(${COL.iris}).rgb * (0.75 + 0.35 * tlNoise(vec3(atan(d.y, d.x) * 8.0, r * 900.0, 1.0)));
+            tint = r < 0.0026 ? vec3(0.02) : r < 0.0058 ? iris : sclera;
+            tlRough = 0.12;
+            tlSkinMask = 0.0;
+          } else if (length(d) < ${f(EYE_R * 1.3)} && d.y > 0.003 && q.z > ${f(EYE_Z)}) {
+            // Lashes and the crease of the upper lid.
+            tint *= 0.45;
+          }
+          // Brows, in the hair's colour: thickest at the inner end, arching over the eye.
+          float bu = (e.x - 0.012) / 0.04;
+          float by = 0.026 + 0.005 * sin(bu * 3.1416) - bu * 0.002;
+          if (q.z > 0.05 && bu > 0.0 && bu < 1.0 && abs(e.y - by) < 0.0042 * (1.0 - bu * 0.55))
+            tint = mix(tint, hairCol.rgb, 0.8 * (0.7 + 0.3 * tlNoise(p * 1200.0)));
+          // Lips: the skin's own colour, deeper and redder, and a little glossier.
+          float lip = min(tlEllipse(e, vec2(0.0, -0.053), vec2(0.021, 0.0062)), tlEllipse(e, vec2(0.0, -0.064), vec2(0.019, 0.0068)));
+          if (q.z > 0.075 && lip < 1.15) {
+            float l = 1.0 - smoothstep(0.75, 1.15, lip);
+            tint *= mix(vec3(1.0), vec3(0.84, 0.64, 0.62), l);
+            tlRough = mix(tlRough, 0.38, l);
           }
         }
         diffuseColor.rgb = tint;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = tlRough;`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          // Cloth has a weave and folds; the eye reads both as "fabric" long before it
+          // reads the colour. Folds gather at the waist and under the arms, the shorts
+          // crease down the leg, and the weave fades out before it can shimmer.
+          float h = 0.0;
+          // The weave only where a pixel is well under a millimetre, or it swims as moiré.
+          float weave = 1.0 - smoothstep(0.00012, 0.0003, fwidth(p.y));
+          if (region == 1 || region == 2) {
+            float waist = smoothstep(${f(k.shirtHem + 0.2)}, ${f(k.shirtHem + 0.02)}, p.y);
+            h += 0.0022 * waist * sin(p.y * 150.0 + 3.0 * sin(atan(p.z, p.x) * 3.0) + tlNoise(p * 20.0) * 3.0);
+            h += 0.0012 * tlNoise(p * 38.0);
+            h += 0.00018 * weave * sin(p.x * 2600.0) * sin(p.y * 2600.0);
+          } else if (region == 3) {
+            h += 0.0028 * sin(atan(p.z, abs(p.x) - 0.12) * 7.0 + p.y * 30.0 + tlNoise(p * 16.0) * 2.0);
+            h += 0.00018 * weave * sin(p.x * 2400.0 + p.y * 2400.0);
+          } else if (region == 4) {
+            h += 0.0006 * weave * sin(atan(p.z, abs(p.x) - 0.12) * 60.0);
+          } else if (region == 0) {
+            h += 0.00012 * weave * tlNoise(p * 1400.0);
+          }
+          if (h != 0.0) normal = tlBump(-vViewPosition, normal, h);
+        }`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        // Light that goes into skin comes back out warm and softened: a little red in the
+        // shadows is the cheapest thing that stops a face looking like painted plaster.
+        totalEmissiveRadiance += tint * vec3(0.05, 0.018, 0.012) * tlSkinMask;`)
       .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
         #ifdef USE_SHEEN
-          material.sheenColor *= tlCloth;
+          // Cloth: the soft white rim of fibres. Skin: a faint warm one, the same effect
+          // skin gets from light scattering just under its surface.
+          material.sheenColor = mix(tint * vec3(1.0, 0.55, 0.45) * 0.45 * tlSkinMask, material.sheenColor, tlCloth);
         #endif`);
+  };
+  return m;
+}
+
+/**
+ * Hair: not a painted cap. Strands, as fine stripes running back from the hairline and
+ * broken up by noise, over a soft sheen — hair's highlight is a band, not a spot. The
+ * colour is the player's, per instance.
+ */
+function hairMaterial(): THREE.MeshPhysicalMaterial {
+  const m = new THREE.MeshPhysicalMaterial({
+    vertexColors: true,
+    roughness: 0.62,
+    metalness: 0,
+    sheen: 0.6,
+    sheenRoughness: 0.35,
+    sheenColor: new THREE.Color(0x8a7a6a),
+  });
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vTlHair;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vTlHair = position;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vTlHair;
+        float tlH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float tlN(vec2 p) {
+          vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(tlH(i), tlH(i + vec2(1, 0)), f.x), mix(tlH(i + vec2(0, 1)), tlH(i + vec2(1, 1)), f.x), f.y);
+        }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          vec3 c = vTlHair - vec3(0.0, ${f(SKULL_Y + 0.02)}, -0.012);
+          // Around the head, strands; along them, they wander.
+          float around = atan(c.x, c.z);
+          float along = c.y * 40.0 + length(c.xz) * 20.0;
+          float strand = tlN(vec2(around * 90.0 + tlN(vec2(along, around * 6.0)) * 4.0, along * 0.6));
+          float clump = tlN(vec2(around * 14.0, along * 0.3));
+          diffuseColor.rgb *= 0.62 + 0.5 * strand * (0.6 + 0.4 * clump);
+        }`);
   };
   return m;
 }

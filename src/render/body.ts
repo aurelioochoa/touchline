@@ -52,6 +52,11 @@ const FOOT = [9, 12] as const;
 export const HEAD_JOINT_Y = 0.015;
 /** Centre of the skull above the head joint. */
 export const SKULL_Y = 0.208;
+/** The eyeballs, relative to the skull's centre: across, up, forward, and their radius. */
+export const EYE_X = 0.031;
+export const EYE_Y = 0.009;
+export const EYE_Z = 0.071;
+export const EYE_R = 0.0125;
 /** How far below the shoulder line the shirt's hem falls. */
 export const SHIRT_HEM = 0.535;
 /** Below the hip joints, the hem of the shorts. */
@@ -278,17 +283,49 @@ export function bodyVolumes(bind: readonly THREE.Matrix4[]): Volume[] {
   // Cranium, then the face hung off the front of it.
   v.push(E(HEAD, [0, S + 0.02, -0.012], [0.077, 0.092, 0.1], 0.02));
   v.push(E(HEAD, [0, S - 0.035, 0.018], [0.068, 0.075, 0.074], 0.045));
-  v.push(E(HEAD, [0, S - 0.072, 0.01], [0.057, 0.04, 0.064], 0.035));
-  v.push(E(HEAD, [0, S - 0.099, 0.056], [0.024, 0.02, 0.022], 0.03));
+  v.push(E(HEAD, [0, S - 0.068, 0.01], [0.06, 0.04, 0.064], 0.035));
+  v.push(E(HEAD, [0, S - 0.093, 0.056], [0.024, 0.02, 0.022], 0.03));
   v.push(E(HEAD, [-0.05, S - 0.012, 0.05], [0.022, 0.017, 0.024], 0.03));
   v.push(E(HEAD, [0.05, S - 0.012, 0.05], [0.022, 0.017, 0.024], 0.03));
+  // Fuller cheeks over the cheekbones, where a face is soft rather than skull.
+  v.push(E(HEAD, [-0.04, S - 0.036, 0.046], [0.027, 0.028, 0.028], 0.03));
+  v.push(E(HEAD, [0.04, S - 0.036, 0.046], [0.027, 0.028, 0.028], 0.03));
+  // Temples, so the forehead is as wide as the face under it.
+  v.push(E(HEAD, [-0.048, S + 0.02, 0.045], [0.025, 0.03, 0.03], 0.025));
+  v.push(E(HEAD, [0.048, S + 0.02, 0.045], [0.025, 0.03, 0.03], 0.025));
   // Brow ridge: shape, not colour — the brows themselves are painted in the hair colour.
   v.push(E(HEAD, [0, S + 0.03, 0.074], [0.056, 0.014, 0.022], 0.03));
+  // The eyes: a socket cut under the brow, an eyeball set in it, and the lids over the
+  // ball. The old face had two dark beads on a flat front, and it is the hollow and the
+  // lid, more than the eye itself, that make a face look back at you.
+  for (const x of [-EYE_X, EYE_X]) {
+    v.push(E(HEAD, [x, S + 0.01, 0.089], [0.018, 0.012, 0.014], 0.01, { carve: true }));
+    v.push(E(HEAD, [x, S + EYE_Y, EYE_Z], [EYE_R, EYE_R, EYE_R], 0.003));
+    v.push(E(HEAD, [x, S + 0.018, 0.074], [0.016, 0.0055, 0.012], 0.005, {}, [-0.35, 0, 0]));
+    v.push(E(HEAD, [x, S + 0.0, 0.074], [0.014, 0.004, 0.01], 0.005, {}, [0.2, 0, 0]));
+  }
+  // The nose: a bridge, a tip, the two wings either side and the nostrils under them.
   v.push(C(HEAD, [0, S + 0.014, 0.086], [0, S - 0.026, 0.108], 0.01, 0.013, 0.014));
-  v.push(E(HEAD, [0, S - 0.034, 0.098], [0.019, 0.013, 0.016], 0.014));
-  v.push(E(HEAD, [0, S - 0.06, 0.086], [0.022, 0.008, 0.01], 0.01));
-  v.push(E(HEAD, [-0.078, S - 0.005, -0.006], [0.014, 0.032, 0.02], 0.012));
-  v.push(E(HEAD, [0.078, S - 0.005, -0.006], [0.014, 0.032, 0.02], 0.012));
+  v.push(E(HEAD, [0, S - 0.034, 0.098], [0.017, 0.013, 0.016], 0.014));
+  for (const x of [-0.014, 0.014]) {
+    v.push(E(HEAD, [x, S - 0.035, 0.09], [0.009, 0.008, 0.01], 0.007));
+    v.push(E(HEAD, [x * 0.55, S - 0.043, 0.098], [0.004, 0.003, 0.006], 0.003, { carve: true }));
+  }
+  // The mouth: an upper lip with its bow, a fuller lower lip, and the line between them.
+  v.push(E(HEAD, [0, S - 0.053, 0.088], [0.021, 0.006, 0.01], 0.006));
+  v.push(E(HEAD, [0, S - 0.064, 0.086], [0.019, 0.0065, 0.01], 0.006));
+  v.push(E(HEAD, [0, S - 0.0585, 0.095], [0.02, 0.0016, 0.007], 0.002, { carve: true }));
+  // Ears: a shell with its hollow.
+  for (const sx of [-1, 1]) {
+    v.push(E(HEAD, [sx * 0.078, S - 0.005, -0.006], [0.014, 0.032, 0.021], 0.012));
+    v.push(E(HEAD, [sx * 0.087, S - 0.008, -0.002], [0.006, 0.017, 0.011], 0.004, { carve: true }));
+  }
+  // The neck's cords from behind the ear to the collarbone, and the Adam's apple: without
+  // them a neck is a pipe.
+  for (const sx of [-1, 1]) {
+    v.push(C(HEAD, [sx * 0.055, S - 0.05, -0.012], [sx * 0.018, -0.005, 0.045], 0.016, 0.013, 0.025, neck));
+  }
+  v.push(E(HEAD, [0, 0.055, 0.044], [0.011, 0.015, 0.01], 0.012, neck));
 
   // --- arms ---
   for (let a = 0; a < 2; a++) {

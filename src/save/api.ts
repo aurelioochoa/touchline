@@ -136,7 +136,7 @@ export function mostRecentSlot(): number | null {
  * `onboarded` is deliberately absent — the guided first match is per career.
  */
 const PREFS_KEY = 'touchline:prefs';
-const DEVICE_KEYS = ['sound', 'quality', 'matchSpeed', 'reducedMotion', 'commentary', 'camera'] as const;
+const DEVICE_KEYS = ['sound', 'quality', 'matchSpeed', 'reducedMotion', 'commentary', 'camera', 'crowd3d', 'stadiumFx'] as const;
 export type DevicePrefs = Pick<Settings, (typeof DEVICE_KEYS)[number]>;
 
 export function loadPrefs(): Partial<DevicePrefs> {

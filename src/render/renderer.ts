@@ -33,11 +33,11 @@ import {
   type Pose,
 } from './gait.js';
 import { PitchScene, toSceneX, toSceneZ } from './pitch.js';
-import { Stadium } from './stadium.js';
+import { Stadium, type StadiumOptions } from './stadium.js';
 import { blobTexture } from './textures.js';
 import { Rain, paletteFor, sunDirection } from './weather.js';
 import { fairConditions, type Conditions } from '../sim/match/conditions.js';
-import { TIERS, type QualityTier } from './tiers.js';
+import { TIERS, crowdDensity, type QualityTier } from './tiers.js';
 import { PostChain } from './post.js';
 import { BallMotion, type BallDraw, type Carrier } from './ballMotion.js';
 import { applyBallWork, ballWorkOffset, ballWorkSeconds, isBallWork, offsetToSim, type BallOffset, type BallWork } from './tricks.js';
@@ -154,6 +154,9 @@ export interface RenderOptions {
    * pair of feet a viewer is actually watching is the pair with the ball at them.
    */
   onFootPlant?: (simX: number, simY: number, speed: number) => void;
+  /** The modelled crowd, as the settings word it, and the stands' fire and light. */
+  crowd?: 'auto' | 'full' | 'half' | 'off';
+  stadiumFx?: boolean;
 }
 
 /**
@@ -172,6 +175,8 @@ export class RenderClient {
   readonly cam: BroadcastCamera;
   #pitch: PitchScene;
   #stadium: Stadium;
+  /** How much of the ground is modelled, fixed for the match (settings: graphics). */
+  #groundOpts: StadiumOptions;
   #figures: FigureField;
   #ball: BallView;
   #shadows: THREE.InstancedMesh | null = null;
@@ -287,9 +292,10 @@ export class RenderClient {
 
     this.#pitch = new PitchScene(tier.pitchDetail);
     this.scene.add(this.#pitch.group);
-    this.#stadium = new Stadium(0x1d5a);
+    this.#groundOpts = { crowd: crowdDensity(opts.crowd ?? 'auto', this.#tier), fx: opts.stadiumFx ?? true };
+    this.#stadium = new Stadium(0x1d5a, undefined, this.#groundOpts);
     this.scene.add(this.#stadium.group);
-    this.#figures = new FigureField(MAX_FIGURES);
+    this.#figures = new FigureField(MAX_FIGURES, tier.bodyCell);
     this.#figures.setCastShadow(tier.shadowMap);
     this.#figures.setReceiveShadow(tier.shadowMap);
     this.scene.add(this.#figures.group);
@@ -480,7 +486,7 @@ export class RenderClient {
       secondary: state.home.kitSecondary,
       name: state.home.name,
       ...(dress.roof !== undefined ? { roof: dress.roof } : {}),
-    });
+    }, this.#groundOpts);
     if (dress.ball) this.#ball.setStyle(dress.ball.style, dress.ball);
     this.scene.add(this.#stadium.group);
     // A rebuilt stadium is a fresh sky shader, so the weather has to be told again.

@@ -40,3 +40,26 @@ describe('the cameras', () => {
     expect(flashRate(0, 0)).toBeGreaterThan(0);
   });
 });
+
+import { crowdDensity } from './tiers.js';
+import { seatsIn } from './crowd.js';
+
+describe('the 3D crowd', () => {
+  it('fills the ground on ultra and leaves the low tier painted, unless the player says', () => {
+    expect(crowdDensity('auto', 3)).toBe(1);
+    expect(crowdDensity('auto', 0)).toBe(0);
+    expect(crowdDensity('auto', 2)).toBeGreaterThan(crowdDensity('auto', 1));
+    expect(crowdDensity('full', 0)).toBe(1);
+    expect(crowdDensity('half', 3)).toBe(0.5);
+    expect(crowdDensity('off', 3)).toBe(0);
+  });
+
+  it('seats about as many people as a real stand of that size holds', () => {
+    // A 120m side stand's lower tier: twelve metres of rake, fifteen rows.
+    const side = { x: 0, z: 40, rotY: 0, width: 120, z0: 0, y0: 1.5, z1: 12, y1: 6.3 };
+    const full = seatsIn([side], 1, 26);
+    expect(full).toBeGreaterThan(2500);
+    expect(full).toBeLessThan(3600);
+    expect(seatsIn([side], 0.5, 26)).toBeLessThan(full * 0.55);
+  });
+});

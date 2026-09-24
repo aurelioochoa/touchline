@@ -110,8 +110,14 @@ export function appearanceOf(id: number, kit: KitColors, shirt = 0): FigureColor
     skin: pick(SKIN, id, 0x2545),
     hair: pick(HAIR, id, 0x7f4a),
     boot: pick(BOOTS, id, 0xb531),
+    // About a third of a squad has some growth on the jaw, from shadow to a full beard.
+    beard: unit(id, 0x6b1d) < 0.35 ? 0.35 + unit(id, 0x1bd6) * 0.65 : 0,
+    eyes: pick(EYES, id, 0x3e7c),
   };
 }
+
+/** Eye colours, weighted the way a squad is: mostly browns, some hazel, green, blue and grey. */
+const EYES = [0x3b2414, 0x3b2414, 0x4a2f1c, 0x4a2f1c, 0x5a3a20, 0x6b5a2e, 0x4f6a3a, 0x3f6f9a, 0x6a7a86] as const;
 
 /** The referee and his assistants. Black, so nobody mistakes one for a player. */
 export const OFFICIAL_KIT: KitColors = { shirt: 0x1b1e24, shorts: 0x15181d, sock: 0x1b1e24 };

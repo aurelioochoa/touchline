@@ -70,6 +70,9 @@ export interface MatchScreenOptions {
    * than no option (the rule tiers.ts already states for the governor).
    */
   autoQuality?: boolean;
+  /** The modelled crowd and the stands' fire and light (settings: graphics). */
+  crowd?: 'auto' | 'full' | 'half' | 'off';
+  stadiumFx?: boolean;
   onFinished(state: MatchState): void;
   /**
    * The Back button and Escape.
@@ -188,6 +191,7 @@ export class MatchScreen {
     this.#conditions = opts.conditions ?? fairConditions();
     this.#client = new RenderClient({
       canvas, reducedMotion: opts.reducedMotion, tier: opts.tier ?? 2,
+      crowd: opts.crowd ?? 'auto', stadiumFx: opts.stadiumFx ?? true,
       onFootPlant: (x, _y, speed) => {
         if (audio.enabled) audio.footstep(this.#panAt(x), this.#conditions.wetness);
       },

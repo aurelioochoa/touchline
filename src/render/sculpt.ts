@@ -58,6 +58,12 @@ export interface Volume {
   spread?: { to: number; y0: number; y1: number };
   /** Marks the arm's volumes, so the shader can tell a hand from the shorts beside it. */
   arm?: boolean;
+  /**
+   * Cut this volume OUT of what came before it, with a smooth edge of radius `blend`: an
+   * eye socket, a nostril, the line of a mouth. A face is as much hollows as bumps, and a
+   * union alone can only ever add. Carved volumes weigh nothing in the skinning.
+   */
+  carve?: boolean;
 }
 
 export interface SculptOptions {
@@ -231,7 +237,8 @@ export function sculpt(o: SculptOptions): SculptResult {
         let idx = x0 + j * sy + k * sz;
         for (let i = x0; i <= x1; i++, idx++) {
           const d = distance(p, o.min[0] + i * h, y, z);
-          field[idx] = smin(field[idx]!, d, p.v.blend);
+          // Carving is a smooth max against the inside-out volume: max(field, -d).
+          field[idx] = p.v.carve ? -smin(-field[idx]!, d, p.v.blend) : smin(field[idx]!, d, p.v.blend);
         }
       }
     }
@@ -352,6 +359,10 @@ export function sculpt(o: SculptOptions): SculptResult {
     let bestArm = false;
     for (let p = 0; p < prepared.length; p++) {
       const pr = prepared[p]!;
+      if (pr.v.carve) {
+        dist[p] = Infinity;
+        continue;
+      }
       // Cheap reject on the box first: the body has fifty-odd volumes and most are far.
       const m = 0.12;
       if (x < pr.lo.x - m || x > pr.hi.x + m || y < pr.lo.y - m || y > pr.hi.y + m || z < pr.lo.z - m || z > pr.hi.z + m) {

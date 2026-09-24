@@ -35,6 +35,7 @@ export interface SettingsHost {
 
 const QUALITIES: Settings['quality'][] = ['auto', 'low', 'medium', 'high', 'ultra'];
 const COMMENTARY: Settings['commentary'][] = ['off', 'text', 'voice'];
+const CROWDS: Settings['crowd3d'][] = ['auto', 'full', 'half', 'off'];
 
 /** One labelled row with its control on the right, or under it on a phone. */
 function row(label: string, detail: string, control: HTMLElement): HTMLElement {
@@ -79,9 +80,9 @@ function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement {
 }
 
 /**
- * The rows that belong to the device, not the career: sound, speed, commentary, graphics,
- * camera. Shared by this screen and the main menu's settings sheet, so the two can never
- * offer different controls for the same thing.
+ * The rows that belong to the device, not the career: sound, speed, commentary, camera
+ * (the graphics have their own rows, below). Shared by this screen and the main menu's
+ * settings sheet, so the two can never offer different controls for the same thing.
  */
 export function deviceSettingRows(s: Settings, persist: () => void): HTMLElement[] {
   return [
@@ -120,14 +121,6 @@ export function deviceSettingRows(s: Settings, persist: () => void): HTMLElement
       ),
     ),
     row(
-      t('settings.quality'),
-      t('settings.qualityHint'),
-      choice(QUALITIES, s.quality, (v) => t(`settings.quality.${v}` as StringKey), (v) => {
-        s.quality = v;
-        persist();
-      }),
-    ),
-    row(
       t('settings.motion'),
       t('settings.motionHint'),
       choice(
@@ -146,6 +139,40 @@ export function deviceSettingRows(s: Settings, persist: () => void): HTMLElement
   ];
 }
 
+/**
+ * The graphics rows: how good the match looks against how fast it runs. The quality tier,
+ * the modelled crowd, and the fire and light in the stands. Shared, like the device rows,
+ * between this screen and the main menu's sheet.
+ */
+export function graphicsSettingRows(s: Settings, persist: () => void): HTMLElement[] {
+  return [
+    row(
+      t('settings.quality'),
+      t('settings.qualityHint'),
+      choice(QUALITIES, s.quality, (v) => t(`settings.quality.${v}` as StringKey), (v) => {
+        s.quality = v;
+        persist();
+      }),
+    ),
+    row(
+      t('settings.crowd3d'),
+      t('settings.crowd3dHint'),
+      choice(CROWDS, s.crowd3d, (v) => t(`settings.crowd3d.${v}` as StringKey), (v) => {
+        s.crowd3d = v;
+        persist();
+      }),
+    ),
+    row(
+      t('settings.stadiumFx'),
+      t('settings.stadiumFxHint'),
+      toggle(s.stadiumFx, (v) => {
+        s.stadiumFx = v;
+        persist();
+      }),
+    ),
+  ];
+}
+
 export function renderSettings(host: SettingsHost, root: HTMLElement): void {
   const s = host.settings;
 
@@ -153,6 +180,11 @@ export function renderSettings(host: SettingsHost, root: HTMLElement): void {
     heading(t('nav.settings'), 'settings'),
     ...deviceSettingRows(s, () => host.persist()),
     el('p', { class: 'tl-studio-note', style: 'margin:14px 0 0', text: t('menu.settingsHint') }),
+  ]));
+
+  root.append(card([
+    heading(t('settings.graphics'), 'stadium'),
+    ...graphicsSettingRows(s, () => host.persist()),
   ]));
 
   // The badge used to be edited here. It lives in the club studio now, with the kit, the

@@ -38,6 +38,13 @@ export interface Settings {
   commentary: 'off' | 'text' | 'voice';
   /** The match camera last picked. 'tv' is the director cutting between them. */
   camera: CameraMode;
+  /**
+   * A modelled spectator in every seat, and how many of them. 'auto' follows the quality
+   * tier; 'off' is the painted crowd, which costs nothing.
+   */
+  crowd3d: 'auto' | 'full' | 'half' | 'off';
+  /** Flares, smoke, paper and camera flashes in the stands. */
+  stadiumFx: boolean;
 }
 
 export function defaultSettings(): Settings {
@@ -50,6 +57,8 @@ export function defaultSettings(): Settings {
     onboarded: false,
     commentary: 'text',
     camera: 'tv',
+    crowd3d: 'auto',
+    stadiumFx: true,
   };
 }
 

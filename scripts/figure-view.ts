@@ -41,14 +41,15 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-const field = new FigureField(4);
+// ?cell= picks the sculpting grid: 0.016 is the low tier, 0.009 ultra (tiers.ts).
+const field = new FigureField(4, Number(params.get('cell') ?? '0.009'));
 field.setCastShadow(true);
 field.setReceiveShadow(true);
 scene.add(field.group);
 const kits = [
-  { shirt: 0xd8262e, sleeve: 0xd8262e, shorts: 0xffffff, sock: 0xd8262e, skin: 0xc68a5f, hair: 0x1c1512, boot: 0xf24b1d, hairStyle: 1, number: 9, pattern: 2, patternColour: 0xffffff, chest: 0xf2c200 },
-  { shirt: 0x2848a8, sleeve: 0x2848a8, shorts: 0x2848a8, sock: 0x2848a8, skin: 0x8a5a3c, hair: 0x100c0a, boot: 0xffffff, hairStyle: 3, number: 10, pattern: 1, patternColour: 0xb3163c, chest: 0xf2c200 },
-  { shirt: 0xffffff, sleeve: 0xffffff, shorts: 0x14171c, sock: 0xffffff, skin: 0xe8b996, hair: 0x7a4a26, boot: 0x14171c, hairStyle: 2, number: 7 },
+  { shirt: 0xd8262e, sleeve: 0xd8262e, shorts: 0xffffff, sock: 0xd8262e, skin: 0xc68a5f, hair: 0x1c1512, boot: 0xf24b1d, hairStyle: 1, beard: 0.6, eyes: 0x4a2f1c, number: 9, pattern: 2, patternColour: 0xffffff, chest: 0xf2c200 },
+  { shirt: 0x2848a8, sleeve: 0x2848a8, shorts: 0x2848a8, sock: 0x2848a8, skin: 0x8a5a3c, hair: 0x100c0a, boot: 0xffffff, hairStyle: 3, eyes: 0x3b2414, number: 10, pattern: 1, patternColour: 0xb3163c, chest: 0xf2c200 },
+  { shirt: 0xffffff, sleeve: 0xffffff, shorts: 0x14171c, sock: 0xffffff, skin: 0xe8b996, hair: 0x7a4a26, boot: 0x14171c, hairStyle: 2, eyes: 0x3f6f9a, number: 7 },
   { shirt: 0xd8262e, sleeve: 0xd8262e, shorts: 0xffffff, sock: 0xd8262e, skin: 0xa8704a, hair: 0x2a1d14, boot: 0xf24b1d, hairStyle: 0, number: 4, pattern: 2, patternColour: 0xffffff },
 ];
 kits.forEach((k, i) => field.setColors(i, k));

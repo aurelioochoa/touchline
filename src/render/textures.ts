@@ -78,6 +78,11 @@ export interface CrowdSheet {
    * mostly under the roof; a lower tier is mostly in the open.
    */
   shade: number;
+  /**
+   * Seats only, nobody in them: the deck under a modelled crowd (crowd.ts), which would
+   * otherwise stand in front of a painting of itself.
+   */
+  empty?: boolean;
 }
 
 /**
@@ -167,7 +172,7 @@ export function crowdTexture(o: CrowdSheet): THREE.CanvasTexture {
       g.fillRect(x - colW * 0.36, base - rowH * 0.62, colW * 0.72, rowH * 0.46);
       g.fillStyle = seatLit;
       g.fillRect(x - colW * 0.36, base - rowH * 0.62, colW * 0.72, rowH * 0.05);
-      if (rng() < 0.07) continue; // empty seat
+      if (o.empty || rng() < 0.07) continue; // empty seat
 
       const px = x + (rng() - 0.5) * colW * 0.18;
       const standing = rng() < 0.12;

@@ -47,6 +47,10 @@ export interface UltrasOptions {
   home: Rake;
   /** Every seating surface in the ground, for the flashes and the signs. */
   rakes: readonly Rake[];
+  /** The people and what they carry: fans, band, flags, ribbons, signs. Default on. */
+  people?: boolean;
+  /** Fire and light: flares, smoke, paper, camera flashes. Default on. */
+  fx?: boolean;
 }
 
 /** A point on a rake: `u` across it (-0.5..0.5), `v` up it (0 front, 1 back). */
@@ -165,10 +169,10 @@ export class Ultras {
   #excite = 0;
   #burst = 0;
   readonly #fans: Fan[] = [];
-  #mallets!: THREE.InstancedMesh;
-  #trumpets!: THREE.InstancedMesh;
-  #flags!: THREE.InstancedMesh;
-  #poles!: THREE.InstancedMesh;
+  #mallets: THREE.InstancedMesh | null = null;
+  #trumpets: THREE.InstancedMesh | null = null;
+  #flags: THREE.InstancedMesh | null = null;
+  #poles: THREE.InstancedMesh | null = null;
   readonly #drumAt: { pos: THREE.Vector3; rot: number }[] = [];
   readonly #trumpetAt: { pos: THREE.Vector3; rot: number }[] = [];
   readonly #flagAt: { pos: THREE.Vector3; rot: number; phase: number }[] = [];
@@ -185,19 +189,24 @@ export class Ultras {
     const primary = new THREE.Color(o.primary);
     const secondary = new THREE.Color(o.secondary);
 
+    // The terrace is laid out either way: the flares are held by where the fans would be.
     this.#placeFans(o.home);
     const flarePos = this.#pickHolders(FLARES, o.home, 0.3);
     const flagHolders = this.#pickHolders(FLAGS, o.home, 0.45);
-    this.#addFans(primary, secondary);
-    this.#addDrums(o.home, primary);
-    this.#addTrumpets(o.home);
-    this.#addFlags(flagHolders, o.primary, o.secondary, o.name);
-    this.#addRibbons(o.home, o.primary, o.secondary);
+    if (o.people ?? true) {
+      this.#addDrums(o.home, primary);
+      this.#addTrumpets(o.home);
+      this.#addFans(primary, secondary);
+      this.#addFlags(flagHolders, o.primary, o.secondary, o.name);
+      this.#addRibbons(o.home, o.primary, o.secondary);
+      this.#addSigns(o.rakes.filter((r) => r !== o.home), o.primary, o.secondary, o.name);
+    }
     this.#addBanners(o.home, o.primary, o.secondary, o.name);
-    this.#addFlares(flarePos, o.primary);
-    this.#addPaper(o.home, o.primary, o.secondary);
-    this.#addSigns(o.rakes.filter((r) => r !== o.home), o.primary, o.secondary, o.name);
-    this.#addFlashes(o.rakes);
+    if (o.fx ?? true) {
+      this.#addFlares(flarePos, o.primary);
+      this.#addPaper(o.home, o.primary, o.secondary);
+      this.#addFlashes(o.rakes);
+    }
   }
 
   // ---- the people -----------------------------------------------------------------
@@ -907,18 +916,18 @@ export class Ultras {
       this.#e.order = 'XYZ';
       this.#v.set(Math.cos(d.rot) * 0.42 + Math.sin(d.rot) * 0.2, 1.05 + hop, -Math.sin(d.rot) * 0.42 + Math.cos(d.rot) * 0.2).add(d.pos);
       this.#s.set(1, 1, 1);
-      this.#mallets.setMatrixAt(i, this.#m.compose(this.#v, this.#q, this.#s));
+      this.#mallets?.setMatrixAt(i, this.#m.compose(this.#v, this.#q, this.#s));
     });
-    this.#mallets.instanceMatrix.needsUpdate = true;
+    if (this.#mallets) this.#mallets.instanceMatrix.needsUpdate = true;
     this.#trumpetAt.forEach((t, i) => {
       const lift = 0.25 + 0.15 * Math.sin(this.#t * 1.1 + i * 2);
       this.#e.set(-lift, t.rot, 0, 'YXZ');
       this.#q.setFromEuler(this.#e);
       this.#e.order = 'XYZ';
       this.#v.set(Math.sin(t.rot) * 0.1, 1.55 + hop, Math.cos(t.rot) * 0.1).add(t.pos);
-      this.#trumpets.setMatrixAt(i, this.#m.compose(this.#v, this.#q, this.#s));
+      this.#trumpets?.setMatrixAt(i, this.#m.compose(this.#v, this.#q, this.#s));
     });
-    this.#trumpets.instanceMatrix.needsUpdate = true;
+    if (this.#trumpets) this.#trumpets.instanceMatrix.needsUpdate = true;
     // Flags go round in big arcs over the bearer's head.
     this.#flagAt.forEach((f, i) => {
       const swing = Math.sin(this.#t * 1.6 + f.phase) * 0.85;
@@ -928,11 +937,13 @@ export class Ultras {
       this.#v.copy(f.pos);
       this.#v.y += hop * 0.5 - 0.6;
       this.#m.compose(this.#v, this.#q, this.#s);
-      this.#flags.setMatrixAt(i, this.#m);
-      this.#poles.setMatrixAt(i, this.#m);
+      this.#flags?.setMatrixAt(i, this.#m);
+      this.#poles?.setMatrixAt(i, this.#m);
     });
-    this.#flags.instanceMatrix.needsUpdate = true;
-    this.#poles.instanceMatrix.needsUpdate = true;
+    if (this.#flags && this.#poles) {
+      this.#flags.instanceMatrix.needsUpdate = true;
+      this.#poles.instanceMatrix.needsUpdate = true;
+    }
   }
 
   /** 0..1: how much of the end is alight, for the audio's hiss and anything else. */
