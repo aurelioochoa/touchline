@@ -70,6 +70,11 @@ export interface MatchScreenOptions {
    * than no option (the rule tiers.ts already states for the governor).
    */
   autoQuality?: boolean;
+  /** The modelled crowd and the stands' fire and light (settings: graphics). */
+  crowd?: 'auto' | 'full' | 'half' | 'off';
+  stadiumFx?: boolean;
+  /** Low-poly retro players or sculpted ones. */
+  playerStyle?: 'retro' | 'realistic';
   onFinished(state: MatchState): void;
   /**
    * The Back button and Escape.
@@ -188,6 +193,7 @@ export class MatchScreen {
     this.#conditions = opts.conditions ?? fairConditions();
     this.#client = new RenderClient({
       canvas, reducedMotion: opts.reducedMotion, tier: opts.tier ?? 2,
+      crowd: opts.crowd ?? 'auto', stadiumFx: opts.stadiumFx ?? true, playerStyle: opts.playerStyle ?? 'retro',
       onFootPlant: (x, _y, speed) => {
         if (audio.enabled) audio.footstep(this.#panAt(x), this.#conditions.wetness);
       },
@@ -1003,6 +1009,8 @@ export class MatchScreen {
       case 'goal': {
         const scorer = this.#find(e.by);
         audio.goal(mine !== e.ownGoal);
+        // The home end celebrates a goal for the home side, whoever you manage.
+        if ((e.side === 'home') !== e.ownGoal) audio.homeGoal();
         this.#goalFlash(e.side, mine !== e.ownGoal);
         this.#pushTick(
           t('match.goalBy', { name: scorer ? shortName(scorer.name) : '', min: minute }),

@@ -38,14 +38,20 @@ export interface QualityTier {
   post: boolean;
   /** Sun shadow map resolution, when there is one. */
   shadowRes: number;
+  /**
+   * The grid the players' bodies are sculpted on, metres (figure.ts). Finer is a face with
+   * eyelids and lips instead of a suggestion of them, at 21k triangles a player on low and
+   * 68k on ultra. Fixed for a match: a body is sculpted once when the match opens.
+   */
+  bodyCell: number;
 }
 
 /** Index 0 = low … index 3 = ultra. Tier 2 ("high") is the boot default. */
 export const TIERS: QualityTier[] = [
-  { renderScale: 0.6, pitchDetail: 7, crowd: false, sky: true, playerShadows: true, shadowMap: false, rain: false, post: false, shadowRes: 1024 },
-  { renderScale: 0.75, pitchDetail: 10, crowd: true, sky: true, playerShadows: true, shadowMap: false, rain: true, post: false, shadowRes: 1024 },
-  { renderScale: 0.9, pitchDetail: 15, crowd: true, sky: true, playerShadows: true, shadowMap: true, rain: true, post: true, shadowRes: 2048 },
-  { renderScale: 1.0, pitchDetail: 22, crowd: true, sky: true, playerShadows: true, shadowMap: true, rain: true, post: true, shadowRes: 4096 },
+  { renderScale: 0.6, pitchDetail: 7, crowd: false, sky: true, playerShadows: true, shadowMap: false, rain: false, post: false, shadowRes: 1024, bodyCell: 0.016 },
+  { renderScale: 0.75, pitchDetail: 10, crowd: true, sky: true, playerShadows: true, shadowMap: false, rain: true, post: false, shadowRes: 1024, bodyCell: 0.013 },
+  { renderScale: 0.9, pitchDetail: 15, crowd: true, sky: true, playerShadows: true, shadowMap: true, rain: true, post: true, shadowRes: 2048, bodyCell: 0.011 },
+  { renderScale: 1.0, pitchDetail: 22, crowd: true, sky: true, playerShadows: true, shadowMap: true, rain: true, post: true, shadowRes: 4096, bodyCell: 0.009 },
 ];
 
 /** The `settings.quality` vocabulary, and the tier each word means. */
@@ -54,6 +60,18 @@ export const QUALITY_TIERS: Record<'low' | 'medium' | 'high' | 'ultra', number> 
 };
 
 export const DEFAULT_TIER = 2;
+
+/**
+ * The share of seats with a modelled spectator (crowd.ts), from the settings' word and the
+ * quality tier. 'auto' fills the ground on ultra and leaves the low tier with the painted
+ * crowd, which costs nothing; a player who picks a density gets it whatever the tier.
+ */
+export function crowdDensity(setting: 'auto' | 'full' | 'half' | 'off', tier: number): number {
+  if (setting === 'full') return 1;
+  if (setting === 'half') return 0.5;
+  if (setting === 'off') return 0;
+  return [0, 0.4, 0.7, 1][Math.max(0, Math.min(3, tier))] as number;
+}
 
 const WINDOW_DEFAULT = 45;
 const LOW_FPS = 46;

@@ -14,7 +14,7 @@ import { listSlots, type SlotInfo } from '../save/api.js';
 import { button, clear, el, heading, sheet } from './dom.js';
 import { crestSvg, defaultCrest } from './crest.js';
 import { icon } from './icons.js';
-import { deviceSettingRows } from './settings.js';
+import { deviceSettingRows, graphicsSettingRows } from './settings.js';
 import { unpackCrest, type Settings } from '../save/format.js';
 
 export interface MenuActions {
@@ -87,6 +87,7 @@ function openSettings(actions: MenuActions): void {
     body: [
       el('p', { class: 'tl-studio-note', style: 'margin:0 0 6px', text: t('menu.settingsHint') }),
       ...deviceSettingRows(actions.settings, () => actions.onSettingsChange()),
+      ...graphicsSettingRows(actions.settings, () => actions.onSettingsChange()),
     ],
   });
 }
