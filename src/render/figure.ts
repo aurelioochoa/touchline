@@ -28,7 +28,7 @@ import { type Pose } from './gait.js';
 import { PATTERN_GLSL, TORSO_HALF_WIDTH, TORSO_HEIGHT } from './kitPattern.js';
 import { digitAtlas } from './textures.js';
 import { sculpt } from './sculpt.js';
-import { CELL, paintFigure, psxGeometry } from './psx.js';
+import { CELL, HAIR_NAMES, paintFigure, psxGeometry, retroHair } from './psx.js';
 import {
   BODY_MAX, BODY_MIN, BONE_COUNT, BONES, EYE_R, EYE_X, EYE_Y, EYE_Z, SKULL_Y, SLEEVE,
   bindMatrices, bodyVolumes, bone, kitLines, poseBones, poseScratch, type Bone,
@@ -39,7 +39,7 @@ import {
  * the others get a zero matrix, the same way a substituted player is hidden. Five extra
  * draw calls buys a squad that is not eleven identical swim caps.
  */
-export const HAIR_STYLES = ['hairCrop', 'hairShort', 'hairQuiff', 'hairCurly', 'hairBun'] as const;
+export const HAIR_STYLES = HAIR_NAMES;
 type HairStyle = (typeof HAIR_STYLES)[number];
 
 /** Grid spacing the body is sculpted at, unless the quality tier asks for another (tiers.ts). */
@@ -96,14 +96,9 @@ const CRANIUM = { c: new THREE.Vector3(0, SKULL_Y + 0.02, -0.012), r: new THREE.
 function buildHair(style: HairStyle, retro = false): THREE.BufferGeometry {
   const HR = 0.115;
   const W = 0xffffff;
-  // A retro head carries its short hair in its texture; only the cuts with volume are
-  // modelled, and with a handful of faces.
-  if (retro && (style === 'hairCrop' || style === 'hairShort')) {
-    const empty = new THREE.BufferGeometry();
-    empty.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
-    return empty;
-  }
-  const seg = (n: number) => (retro ? 6 : n);
+  // The retro figure has its own faceted cut, built on its own head (psx.ts).
+  if (retro) return retroHair(style);
+  const seg = (n: number) => n;
   const scalp = (rx: number, ry: number, rz: number, lift: number, tilt = -0.5) => ({
     geo: ellipsoid(rx, ry, rz, seg(16)),
     color: W,
@@ -139,6 +134,25 @@ function buildHair(style: HairStyle, retro = false): THREE.BufferGeometry {
         { geo: ellipsoid(0.045, 0.04, 0.045, seg(10)), color: W, pos: [0, SKULL_Y + 0.1, -0.085] },
       ]);
       break;
+    case 'hairFade':
+      // Clippered sides, the length left on top.
+      geo = mergeParts([
+        scalp(HR * 0.93, HR * 0.7, HR * 1.03, 0.024),
+        { geo: ellipsoid(HR * 0.6, HR * 0.34, HR * 0.95, seg(14)), color: W, pos: [0, SKULL_Y + 0.08, 0.005], rot: [-0.1, 0, 0] },
+      ]);
+      break;
+    case 'hairLong':
+      // To the shoulders: the cap, and a fall of hair down the back of the neck.
+      geo = mergeParts([
+        scalp(HR * 0.98, HR * 0.8, HR * 1.08, 0.03),
+        { geo: ellipsoid(HR * 0.95, HR * 1.05, HR * 0.55, seg(14)), color: W, pos: [0, SKULL_Y - 0.05, -0.065] },
+      ]);
+      break;
+    case 'hairBald': {
+      const empty = new THREE.BufferGeometry();
+      empty.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+      return empty;
+    }
   }
   // Old cranium onto new, a few percent proud so the shell never sinks into the scalp.
   const s = CRANIUM.r.clone().divide(OLD_SKULL.r).multiplyScalar(1.035);
@@ -158,6 +172,7 @@ function buildHair(style: HairStyle, retro = false): THREE.BufferGeometry {
   geo.computeVertexNormals();
   return geo;
 }
+
 
 /** How the players are drawn (settings: graphics): sculpted, or low-poly with painted skins. */
 export type FigureStyle = 'realistic' | 'retro';
@@ -735,8 +750,11 @@ function bodyMaterial(tex: THREE.Texture, digits: THREE.Texture, k: ReturnType<t
 function hairMaterial(retro = false): THREE.MeshPhysicalMaterial {
   const m = new THREE.MeshPhysicalMaterial({
     vertexColors: true,
-    // Faceted for the retro figure, whose haircut is a dozen faces and should look it.
+    // Faceted for the retro figure, whose haircut is a dozen faces and should look it —
+    // and two-sided, so the inside of the cap fills the sliver between its edge and the
+    // head instead of showing the sky through it.
     flatShading: retro,
+    side: retro ? THREE.DoubleSide : THREE.FrontSide,
     roughness: 0.62,
     metalness: 0,
     sheen: 0.6,
@@ -783,7 +801,8 @@ function hairMaterial(retro = false): THREE.MeshPhysicalMaterial {
  * 3. Colour is cut to fifteen bits with an ordered dither, the grain of every PS1 frame.
  */
 function retroMaterial(fig: THREE.Texture, atlas: THREE.Texture, cols: number, rows: number): THREE.MeshStandardMaterial {
-  const m = new THREE.MeshStandardMaterial({ map: atlas, roughness: 0.92, metalness: 0 });
+  // Flat-shaded: every face one tone, so the planes of a low-poly head read as planes.
+  const m = new THREE.MeshStandardMaterial({ map: atlas, roughness: 0.92, metalness: 0, flatShading: true });
   m.onBeforeCompile = (shader) => {
     shader.uniforms.tlFig = { value: fig };
     shader.vertexShader = shader.vertexShader

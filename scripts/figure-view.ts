@@ -59,6 +59,7 @@ const views = [
   { name: 'front', at: [-1.8, 0], facing: Math.PI / 2, cam: [0, 1.0, 3.4], look: [0, 0.92, 0], fov: 38 },
   { name: 'side', at: [0, 0], facing: 0, cam: [0, 1.0, 3.4], look: [0, 0.92, 0], fov: 38 },
   { name: 'run', at: [1.8, 0], facing: 0, cam: [0, 1.0, 3.4], look: [0, 0.92, 0], fov: 38 },
+  { name: 'neck', at: [-1.8, 0], facing: Math.PI / 2, cam: [0.55, 1.6, -0.85], look: [0, 1.5, 0], fov: 32 },
   { name: 'face', at: [-1.8, 0], facing: Math.PI / 2 + 0.5, cam: [0.25, 1.62, 0.85], look: [0, 1.58, 0], fov: 30 },
 ] as const;
 
@@ -102,6 +103,27 @@ function frame(t: number) {
     renderer.setScissor(x, y, w, h);
     renderer.render(scene, cam);
   });
+}
+
+// ?heads: every haircut on one row of heads, to check each cut sits on the head it is for.
+if (params.has('heads')) {
+  const cuts = new FigureField(8, Number(params.get('cell') ?? '0.009'), params.get('style') === 'realistic' ? 'realistic' : 'retro');
+  cuts.setCastShadow(true);
+  scene.add(cuts.group);
+  field.group.visible = false;
+  const skins = [0xf1c7a5, 0xc68a5f, 0x8a5a3c, 0xe8b996, 0x6e4a33, 0xd9a07a, 0xb07850, 0xf0d0ae];
+  const hairs = [0x1c1410, 0x3a2618, 0x100c0a, 0x8c6a3c, 0x1c1410, 0x5b3a1f, 0x2b2016, 0xb9a58a];
+  const turn = Number(params.get('turn') ?? '0.45');
+  for (let i = 0; i < 8; i++) {
+    cuts.setColors(i, { shirt: 0xd8262e, sleeve: 0xd8262e, shorts: 0xffffff, sock: 0xd8262e, skin: skins[i]!, hair: hairs[i]!, boot: 0x111111, hairStyle: i, beard: i % 3 === 0 ? 0.5 : 0 });
+    cuts.setPose(i, 40 + (i - 3.5) * 0.42, 40, Math.PI / 2 + turn, emptyPose());
+  }
+  cuts.flush();
+  const cam = new THREE.PerspectiveCamera(16, W / H, 0.05, 50);
+  cam.position.set(40, 1.72, 40 + 6.2);
+  cam.lookAt(40, 1.58, 40);
+  renderer.render(scene, cam);
+  throw new Error('heads rendered');
 }
 
 const t0 = Number(params.get('t') ?? '0.3');

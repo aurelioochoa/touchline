@@ -261,8 +261,8 @@ export function bodyVolumes(bind: readonly THREE.Matrix4[]): Volume[] {
   v.push(E(CHEST, [0, -0.14, -0.03], [0.162, 0.13, 0.092], 0.05, spine));
   // Trapezius: the slope from the neck to the shoulder. A figure without it has a neck
   // standing on a shelf — the single most "made of parts" thing the old one did.
-  v.push(E(CHEST, [-0.08, -0.004, -0.014], [0.1, 0.05, 0.062], 0.05, {}, [0, 0, 0.36]));
-  v.push(E(CHEST, [0.08, -0.004, -0.014], [0.1, 0.05, 0.062], 0.05, {}, [0, 0, -0.36]));
+  v.push(E(CHEST, [-0.075, 0.014, -0.016], [0.1, 0.056, 0.064], 0.055, {}, [0, 0, 0.4]));
+  v.push(E(CHEST, [0.075, 0.014, -0.016], [0.1, 0.056, 0.064], 0.055, {}, [0, 0, -0.4]));
   // The point of the shoulder, bridging the trapezius into the sleeve's cap.
   v.push(E(CHEST, [-0.165, -0.05, 0], [0.07, 0.048, 0.064], 0.05));
   v.push(E(CHEST, [0.165, -0.05, 0], [0.07, 0.048, 0.064], 0.05));

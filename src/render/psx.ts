@@ -40,7 +40,61 @@ const LEG_HEM = 0.28;
 const KNEE = 0.55;
 const SOCK_TOP = 0.61;
 /** Down the head: the rings, crown to neck. */
-const HEAD_V = { brow: 0.26, eyes: 0.32, nose: 0.45, mouth: 0.55, jaw: 0.62, chin: 0.75 } as const;
+const HEAD_V = { brow: 0.285, eyes: 0.34, nose: 0.47, mouth: 0.565, jaw: 0.71, chin: 0.79 } as const;
+
+/**
+ * The retro head's rings, crown to neck, relative to the skull centre `SKULL_Y` (except the
+ * two neck rings, which are relative to the head joint). ONE profile, used to build the
+ * head AND every haircut, so any cut sits on the head it is cut for.
+ *
+ * The jaw is the classic low-poly bust's: a ring at the angle of the jaw under the ears,
+ * wide at the back, and planes running forward from it to a narrow, square chin.
+ */
+export interface HeadRing {
+  y: number;
+  rx: number;
+  rxBack?: number;
+  rz: number;
+  rzBack?: number;
+  z: number;
+  v: number;
+  front?: number;
+  /** y is relative to the head joint rather than the skull centre. */
+  neck?: boolean;
+}
+export const HEAD_PROFILE: readonly HeadRing[] = [
+  { y: 0.1, rx: 0.05, rz: 0.058, rzBack: 0.07, z: -0.012, v: 0.06 },
+  { y: 0.068, rx: 0.073, rz: 0.087, rzBack: 0.097, z: -0.01, v: 0.16 },
+  { y: 0.022, rx: 0.078, rz: 0.093, rzBack: 0.1, z: -0.005, v: 0.31, front: 0.006 },
+  { y: -0.025, rx: 0.074, rz: 0.09, rzBack: 0.093, z: 0, v: HEAD_V.nose, front: 0.022 },
+  { y: -0.06, rx: 0.066, rxBack: 0.07, rz: 0.086, rzBack: 0.08, z: -0.004, v: 0.6 },
+  { y: -0.098, rx: 0.048, rxBack: 0.066, rz: 0.074, rzBack: 0.068, z: -0.008, v: HEAD_V.jaw },
+  { y: -0.12, rx: 0.03, rxBack: 0.056, rz: 0.068, rzBack: 0.056, z: -0.012, v: HEAD_V.chin },
+  { y: 0.075, rx: 0.06, rz: 0.056, z: -0.012, v: 0.88, neck: true },
+  { y: 0.02, rx: 0.075, rz: 0.066, z: -0.016, v: 1, neck: true },
+];
+const CROWN_Y = 0.116;
+
+/** The head's surface at height `y` (skull frame) and angle `phi` (0 = the face), pushed out by `out`. */
+export function headSurface(y: number, phi: number, out: number): [number, number] {
+  const ys = HEAD_PROFILE.map((r) => (r.neck ? r.y - SKULL_Y : r.y));
+  let i = ys.findIndex((ry) => ry <= y);
+  if (i < 0) i = ys.length - 1;
+  const hi = HEAD_PROFILE[Math.max(0, i - 1)] as HeadRing;
+  const lo = HEAD_PROFILE[i] as HeadRing;
+  const yh = ys[Math.max(0, i - 1)] as number;
+  const yl = ys[i] as number;
+  let t = yh === yl ? 0 : (y - yl) / (yh - yl);
+  t = Math.min(1, Math.max(0, t));
+  // Above the top ring, close in toward the crown.
+  const cap = y > (ys[0] as number) ? 1 - Math.min(1, (y - (ys[0] as number)) / (CROWN_Y - (ys[0] as number))) : 1;
+  const L = (a: number, b: number) => a + (b - a) * t;
+  const front = Math.cos(phi) > 0;
+  const rx = L(front ? lo.rx : lo.rxBack ?? lo.rx, front ? hi.rx : hi.rxBack ?? hi.rx) * cap;
+  const rz = L(front ? lo.rz : lo.rzBack ?? lo.rz, front ? hi.rz : hi.rzBack ?? hi.rz) * cap;
+  const z = L(lo.z, hi.z);
+  return [Math.sin(phi) * (rx + out), z + Math.cos(phi) * (rz + out)];
+}
 
 type Weights = Partial<Record<number, number>>;
 
@@ -50,6 +104,14 @@ interface Ring {
   rx: number;
   rz: number;
   z?: number;
+  /**
+   * The back's depth, when it differs from the front's (`rz`). Under the jaw the front of
+   * the head is the chin but the back is still the nape: one centred ring there pinched the
+   * back of the neck in, and the head looked stuck on rather than grown out of the neck.
+   */
+  rzBack?: number;
+  /** And the back half's width: a chin is narrow, the neck behind it is not. */
+  rxBack?: number;
   w: Weights;
   v: number;
   /** Push the front-most vertex forward: a nose, a brow. */
@@ -94,7 +156,11 @@ export function psxGeometry(): { geometry: THREE.BufferGeometry; triangles: numb
       for (let k = 0; k <= n; k++) {
         const phi = Math.PI / 2 + (2 * Math.PI * k) / n;
         const front = ring.front && k === (3 * n) / 4 ? ring.front : 0;
-        row.push(vert(ring.bone, ring.rx * Math.sin(phi), ring.y, (ring.z ?? 0) + ring.rz * Math.cos(phi) + front, ring.w, k / n, ring.v, r));
+        // The side vertices (cos = 0) belong to the back: they are the neck's, not the chin's.
+        const back = Math.cos(phi) < 1e-6;
+        const depth = back && ring.rzBack !== undefined ? ring.rzBack : ring.rz;
+        const width = back && ring.rxBack !== undefined ? ring.rxBack : ring.rx;
+        row.push(vert(ring.bone, width * Math.sin(phi), ring.y, (ring.z ?? 0) + depth * Math.cos(phi) + front, ring.w, k / n, ring.v, r));
       }
       first.push(row);
     }
@@ -124,8 +190,10 @@ export function psxGeometry(): { geometry: THREE.BufferGeometry; triangles: numb
 
   // Torso, neck to crotch: shirt over the ribs, shorts over the hips.
   tube([
-    { bone: C, y: 0.02, rx: 0.07, rz: 0.064, z: -0.012, w: { [C]: 0.7, [HD]: 0.3 }, v: 0 },
-    { bone: C, y: 0.0, rx: 0.12, rz: 0.08, z: -0.01, w: { [C]: 1 }, v: 0.05 },
+    // The neck base sits high, on a trapezius that slopes out to the shoulder: without the
+    // slope the neck stands on a shelf and the head looks pinned on.
+    { bone: C, y: 0.06, rx: 0.07, rz: 0.064, z: -0.014, w: { [C]: 0.6, [HD]: 0.4 }, v: 0 },
+    { bone: C, y: 0.035, rx: 0.13, rz: 0.08, z: -0.014, w: { [C]: 1 }, v: 0.05 },
     { bone: C, y: -0.075, rx: 0.192, rz: 0.108, w: { [C]: 1 }, v: V.shoulder },
     { bone: C, y: -0.2, rx: 0.178, rz: 0.12, w: { [C]: 1 }, v: 0.3 },
     { bone: C, y: -0.36, rx: 0.16, rz: 0.106, w: { [C]: 0.7, [H]: 0.3 }, v: 0.5 },
@@ -135,17 +203,49 @@ export function psxGeometry(): { geometry: THREE.BufferGeometry; triangles: numb
     { bone: H, y: -0.14, rx: 0.12, rz: 0.09, z: -0.01, w: { [H]: 1 }, v: 0.97 },
   ], 8, R.torso, undefined, [0, -0.17, -0.005]);
 
-  // Neck and head: eight sides, a nose and a brow pushed out of the front.
-  tube([
-    { bone: HD, y: -0.01, rx: 0.064, rz: 0.058, z: -0.012, w: { [C]: 0.5, [HD]: 0.5 }, v: 1 },
-    { bone: HD, y: 0.08, rx: 0.058, rz: 0.055, z: -0.005, w: { [HD]: 1 }, v: 0.86 },
-    { bone: HD, y: S - 0.115, rx: 0.034, rz: 0.035, z: 0.045, w: { [HD]: 1 }, v: HEAD_V.chin },
-    { bone: HD, y: S - 0.07, rx: 0.06, rz: 0.072, z: 0.012, w: { [HD]: 1 }, v: HEAD_V.jaw },
-    { bone: HD, y: S - 0.025, rx: 0.07, rz: 0.09, z: 0.005, w: { [HD]: 1 }, v: HEAD_V.nose, front: 0.022 },
-    { bone: HD, y: S + 0.025, rx: 0.078, rz: 0.098, z: -0.004, w: { [HD]: 1 }, v: HEAD_V.eyes - 0.02, front: 0.004 },
-    { bone: HD, y: S + 0.07, rx: 0.071, rz: 0.092, z: -0.01, w: { [HD]: 1 }, v: 0.16 },
-    { bone: HD, y: S + 0.102, rx: 0.045, rz: 0.062, z: -0.012, w: { [HD]: 1 }, v: 0.06 },
-  ].reverse(), 8, R.head, [0, S + 0.116, -0.012]);
+  // Neck and head, after the classic low-poly bust: a thick neck tapering up out of the
+  // trapezius, a jaw of flat planes running in a V from under the ears to a narrow chin,
+  // flat cheeks, a ridge down the middle of the face for the nose, and a square brow.
+  // Eight sides, flat-shaded, so every plane reads.
+  tube(
+    HEAD_PROFILE.map((h) => ({
+      bone: HD,
+      y: h.neck ? h.y : S + h.y,
+      rx: h.rx,
+      ...(h.rxBack !== undefined ? { rxBack: h.rxBack } : {}),
+      rz: h.rz,
+      ...(h.rzBack !== undefined ? { rzBack: h.rzBack } : {}),
+      z: h.z,
+      v: h.v,
+      ...(h.front !== undefined ? { front: h.front } : {}),
+      // The base of the neck is half the chest's, so the neck bends out of the shoulders.
+      w: h.neck && h.y < 0.05 ? { [C]: 0.5, [HD]: 0.5 } : { [HD]: 1 },
+    })),
+    8, R.head, [0, S + CROWN_Y, -0.012],
+  );
+
+  // Ears: a flat wedge either side, which is all a low-poly ear ever is.
+  {
+    const w = { [HD]: 1 };
+    const mid = new THREE.Vector3(0, S, -0.01).applyMatrix4(bind[HD] as THREE.Matrix4);
+    for (const sx of [-1, 1]) {
+      const u = sx < 0 ? 0.5 : 0.02;
+      const e = [
+        vert(HD, sx * 0.073, S + 0.024, -0.004, w, u, HEAD_V.eyes - 0.04, R.head),
+        vert(HD, sx * 0.07, S - 0.032, 0.004, w, u, HEAD_V.nose + 0.02, R.head),
+        vert(HD, sx * 0.07, S - 0.03, -0.03, w, u + 0.03, HEAD_V.nose, R.head),
+        vert(HD, sx * 0.09, S + 0.004, -0.022, w, u + 0.01, HEAD_V.eyes, R.head),
+      ];
+      const at = (i: number) => new THREE.Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+      for (const [a, b, c] of [[0, 1, 3], [1, 2, 3], [2, 0, 3]] as const) {
+        const A = e[a]!, Bv = e[b]!, Cv = e[c]!;
+        const n = new THREE.Vector3().crossVectors(at(Bv).sub(at(A)), at(Cv).sub(at(A)));
+        const out = at(A).add(at(Bv)).add(at(Cv)).divideScalar(3).sub(mid);
+        if (n.dot(out) >= 0) idx.push(A, Bv, Cv);
+        else idx.push(A, Cv, Bv);
+      }
+    }
+  }
 
   for (let a = 0; a < 2; a++) {
     const U = B(`upperArm${a}`);
@@ -309,10 +409,14 @@ export function paintFigure(g: CanvasRenderingContext2D, ox: number, oy: number,
     const r = R.head;
     const hy = (v: number) => Math.round(v * r.h);
     const fx = (du: number) => r.x + Math.round((0.75 + du) * r.w);
-    // Skin, darker under the jaw where the chin shades the neck.
+    // Skin, shaded only UNDER the chin, at the front, fading in: a band all the way round
+    // read as a seam between the head and the neck.
     for (let y = 0; y < r.h; y++) {
-      const k = y > hy(HEAD_V.chin) ? 0.82 : y > hy(HEAD_V.jaw) ? 0.93 : 1;
-      px(r.x, r.y + y, shade(c.skin, k), r.w, 1);
+      for (let x = 0; x < r.w; x++) {
+        const front = Math.max(0, Math.cos(2 * Math.PI * ((x + 0.5) / r.w - 0.75)));
+        const under = Math.min(1, Math.max(0, (y - hy(HEAD_V.jaw + 0.06)) / Math.max(1, hy(0.12))));
+        px(r.x + x, r.y + y, shade(c.skin, 1 - 0.16 * front * under));
+      }
     }
     // Ears, on both sides of the head.
     for (const u of [0.5, 0]) {
@@ -320,17 +424,20 @@ export function paintFigure(g: CanvasRenderingContext2D, ox: number, oy: number,
       px(x - 1, r.y + hy(0.3), shade(c.skin, 0.8), 3, 7);
       px(x, r.y + hy(0.33), shade(c.skin, 0.65), 1, 3);
     }
-    // Hair: a hairline high at the front, down to the ears at the sides, to the nape behind.
-    const style = c.hairStyle ?? 1;
+    // Hair, painted under the modelled cut so no scalp shows between its facets: the same
+    // hairline the cut is built to (hairlineOf), converted to the texture's rows.
+    const style = HAIR_NAMES[c.hairStyle ?? 1] ?? 'hairShort';
     const hair = c.hair;
-    const drop = style === 3 ? 0.06 : style === 0 ? -0.03 : 0;
-    for (let x = 0; x < r.w; x++) {
-      const u = (x + 0.5) / r.w;
-      const toFront = Math.cos(2 * Math.PI * (u - 0.75)); // 1 at the face, -1 at the back
-      const line = (toFront > 0 ? 0.24 - 0.06 * toFront : 0.24 - 0.3 * toFront) + drop;
-      for (let y = 0; y < hy(Math.min(0.62, line)); y++) {
-        const k = 0.8 + rnd() * 0.35 + (style === 0 ? 0.25 : 0);
-        px(r.x + x, r.y + y, shade(style === 0 ? mixHex(hair, c.skin, 0.35) : hair, k));
+    if (style !== 'hairBald') {
+      for (let x = 0; x < r.w; x++) {
+        const phi = 2 * Math.PI * ((x + 0.5) / r.w - 0.75);
+        const line = vOfSkullY(hairlineOf(style, phi));
+        for (let y = 0; y < hy(line); y++) {
+          // A fade is clippered at the sides and back: stubble in the hair's colour, not hair.
+          const low = style === 'hairFade' && vOfSkullY(0.05) < (y + 0.5) / r.h;
+          const col = low || style === 'hairCrop' ? mixHex(hair, c.skin, 0.4) : hair;
+          px(r.x + x, r.y + y, shade(col, 0.82 + rnd() * 0.3));
+        }
       }
     }
     // Stubble or a beard, speckled over the jaw and the upper lip.
@@ -339,11 +446,20 @@ export function paintFigure(g: CanvasRenderingContext2D, ox: number, oy: number,
       // Stubble is a tint with a little grain, not a scatter of black pixels: the skin
       // shifted toward the hair, most along the jaw and on the chin.
       const tone = mixHex(c.skin, hair, 0.25 + beard * 0.45);
-      for (let y = hy(HEAD_V.nose + 0.05); y < hy(HEAD_V.chin + 0.05); y++) {
+      const top = hy(HEAD_V.nose + 0.05);
+      const bottom = hy(HEAD_V.chin + 0.02);
+      const chinY = hy(HEAD_V.chin);
+      for (let y = top; y < bottom; y++) {
         const lower = y >= hy(HEAD_V.mouth + 0.03);
-        const half = lower ? 0.2 : 0.06;
+        const half = lower ? 0.22 : 0.06;
         for (let du = -half; du <= half; du += 1 / r.w) {
           if (!lower && y < hy(HEAD_V.mouth) - 1 && Math.abs(du) > 0.05) continue;
+          // Thinning at its edges — up the cheeks and down under the chin onto the neck —
+          // with a dither rather than a line: a beard that stops in a hard edge at the jaw
+          // reads as the edge of the head.
+          const side = lower ? Math.min(1, (half - Math.abs(du)) / 0.07) : 1;
+          const under = y > chinY ? 1 - (y - chinY) / Math.max(1, bottom - chinY) : 1;
+          if (rnd() > side * under) continue;
           px(fx(du), r.y + y, shade(tone, 0.94 + rnd() * 0.12));
         }
       }
@@ -403,4 +519,211 @@ export function paintFigure(g: CanvasRenderingContext2D, ox: number, oy: number,
     for (let x = 18; x < r.w; x += 3) px(r.x + x, r.y + 2, shade(c.boot, 0.7), 2, 1);
     px(r.x, r.y + r.h - 5, shade(c.boot, 0.35), r.w, 5);
   }
+}
+
+/** The haircuts, in HAIR_STYLES order (figure.ts). */
+export const HAIR_NAMES = ['hairCrop', 'hairShort', 'hairQuiff', 'hairCurly', 'hairBun', 'hairFade', 'hairLong', 'hairBald'] as const;
+export type HairName = (typeof HAIR_NAMES)[number];
+
+/** Skull-frame height → the head texture's row (0 crown … 1 neck). */
+function vOfSkullY(y: number): number {
+  const ys = [CROWN_Y, ...HEAD_PROFILE.map((r) => (r.neck ? r.y - SKULL_Y : r.y))];
+  const vs = [0, ...HEAD_PROFILE.map((r) => r.v)];
+  for (let i = 0; i + 1 < ys.length; i++) {
+    const a = ys[i] as number;
+    const b = ys[i + 1] as number;
+    if (y <= a && y >= b) return (vs[i] as number) + ((vs[i + 1] as number) - (vs[i] as number)) * ((a - y) / (a - b));
+  }
+  return y > CROWN_Y ? 0 : 1;
+}
+
+/**
+ * Where each cut's hair stops, as a skull-frame height at angle `phi` (0 = the face): over
+ * the brow at the front, round the ears at the sides, at the nape behind.
+ */
+export function hairlineOf(style: HairName, phi: number): number {
+  const f = Math.cos(phi); // 1 front, 0 sides, -1 back
+  const line = (front: number, side: number, back: number) =>
+    f > 0 ? side + (front - side) * f : side + (back - side) * -f;
+  switch (style) {
+    case 'hairCrop': return line(0.058, 0.012, -0.035);
+    case 'hairShort': return line(0.05, 0.006, -0.048);
+    case 'hairQuiff': return line(0.056, 0.01, -0.045);
+    case 'hairCurly': return line(0.042, -0.006, -0.065);
+    case 'hairBun': return line(0.056, 0.01, -0.03);
+    case 'hairFade': return line(0.054, 0.004, -0.05);
+    case 'hairLong': return line(0.048, -0.075, -0.16);
+    case 'hairBald': return 1;
+  }
+}
+
+/**
+ * A retro haircut in the head bone's frame: faceted rings that follow THE head (the same
+ * profile the head is built from, headSurface) down to the cut's own hairline, pushed out
+ * by the cut's thickness with a little random chunking so it reads as locks rather than a
+ * helmet — and, per cut, what makes it that cut: a fringe, a quiff, curls, a bun, a fade's
+ * volume on top, or hair down to the shoulders. Colour comes per instance.
+ */
+export function retroHair(style: HairName): THREE.BufferGeometry {
+  const S = SKULL_Y;
+  const n = 12;
+  const pos: number[] = [];
+  const idx: number[] = [];
+  const hash = (a: number, b: number) => {
+    const h = Math.sin(a * 127.1 + b * 311.7 + 7.3) * 43758.5453;
+    return h - Math.floor(h);
+  };
+  const add = (x: number, y: number, z: number) => {
+    pos.push(x, y, z);
+    return pos.length / 3 - 1;
+  };
+  const tri = (a: number, b: number, c: number) => idx.push(a, b, c);
+
+  if (style !== 'hairBald') {
+    // How thick the cut stands off the scalp, by height and angle; and how chunky.
+    const thick = (y: number, f: number): number => {
+      switch (style) {
+        case 'hairCrop': return 0.004;
+        case 'hairBun': return 0.006;
+        case 'hairCurly': return 0.022 + 0.006 * Math.max(0, y / 0.1);
+        case 'hairFade': return 0.016;
+        case 'hairQuiff': return 0.01 + (f > 0.3 && y > 0.06 ? 0.03 * f : 0);
+        case 'hairLong': return 0.014;
+        default: return 0.011;
+      }
+    };
+    const chunk = style === 'hairCrop' || style === 'hairBun' ? 0.002 : style === 'hairCurly' ? 0.016 : 0.007;
+    // Rows from the crown down to the hairline, which is lower at the back than the front,
+    // so each row is a fraction of the way from the crown to that column's hairline.
+    const rows = style === 'hairLong' ? 7 : style === 'hairCurly' ? 5 : 4;
+    const grid: number[][] = [];
+    for (let r = 0; r < rows; r++) {
+      const row: number[] = [];
+      const t = (r + 1) / rows;
+      for (let k = 0; k < n; k++) {
+        const phi = (2 * Math.PI * k) / n;
+        const f = Math.cos(phi);
+        // A fade's clippered sides are paint, not hair: its cut stops where the length starts.
+        const bottom = style === 'hairFade' ? Math.max(hairlineOf(style, phi), 0.042 + 0.012 * Math.max(0, f)) : hairlineOf(style, phi);
+        // Rows gather near the crown, where the head turns fastest.
+        let y = CROWN_Y - (CROWN_Y - bottom) * Math.pow(t, 1.25);
+        // Ragged ends on the long cut, and on the curls.
+        if (r === rows - 1 && (style === 'hairLong' || style === 'hairCurly')) y -= 0.018 * hash(k, 3);
+        const out = thick(y, f) + chunk * hash(k, r);
+        let [x, z] = headSurface(Math.max(y, -0.19), phi, out);
+        // Below the chin the long hair falls straight: it hangs off the head, not the neck.
+        if (style === 'hairLong' && y < -0.06) {
+          const [xs, zs] = headSurface(-0.06, phi, out);
+          x = xs * 1.02;
+          z = f > 0 ? Math.min(z, zs) : Math.min(zs, z) - 0.01;
+        }
+        if (style === 'hairQuiff' && f > 0.4 && r < 2) {
+          y += 0.03 * f;
+          z += 0.015 * f;
+        }
+        row.push(add(x, S + y + (r < rows - 1 ? chunk * (hash(r, k) - 0.5) : 0), z));
+      }
+      grid.push(row);
+    }
+    const crown = add(0, S + CROWN_Y + thick(CROWN_Y, 0) + (style === 'hairQuiff' ? 0.012 : 0), -0.012);
+    for (let k = 0; k < n; k++) tri(crown, (grid[0] as number[])[(k + 1) % n] as number, (grid[0] as number[])[k] as number);
+    for (let r = 0; r + 1 < grid.length; r++) {
+      const a = grid[r] as number[];
+      const b = grid[r + 1] as number[];
+      for (let k = 0; k < n; k++) {
+        const k2 = (k + 1) % n;
+        tri(a[k] as number, a[k2] as number, b[k] as number);
+        tri(a[k2] as number, b[k2] as number, b[k] as number);
+      }
+    }
+  }
+
+  // A lock: a flat three-sided blade from a root on the head to a tip.
+  const lock = (root: [number, number, number], tip: [number, number, number], width: number) => {
+    const a = add(root[0] - width, root[1], root[2] - 0.006);
+    const b = add(root[0] + width, root[1] + 0.004, root[2] - 0.004);
+    const d = add(root[0], root[1] - 0.002, root[2] + 0.008);
+    const c = add(tip[0], tip[1], tip[2]);
+    tri(a, b, d);
+    tri(b, c, d);
+    tri(c, a, d);
+    tri(a, c, b);
+  };
+  if (style === 'hairShort' || style === 'hairLong') {
+    // A fringe: blades falling over the forehead, fanned, stopping above the brows.
+    for (let i = 0; i < 4; i++) {
+      const x = ((i + 0.5) / 4 - 0.5) * 0.1;
+      const [, z] = headSurface(0.07, Math.asin(Math.max(-1, Math.min(1, x / 0.08))), 0.012);
+      lock([x, S + 0.075, z - 0.004], [x * 1.25 + (x > 0 ? 0.006 : -0.006), S + 0.04 - 0.006 * hash(i, 9), z + 0.012], 0.02);
+    }
+  }
+  if (style === 'hairQuiff') {
+    // Swept up and back from the front: blades rising over the crown.
+    for (let i = 0; i < 3; i++) {
+      const x = (i - 1) * 0.032;
+      lock([x, S + 0.09, 0.085], [x * 0.7, S + 0.145 + 0.01 * hash(i, 2), 0.03], 0.024);
+    }
+  }
+  if (style === 'hairFade') {
+    // The volume on top of a fade, pushed forward in a few blades.
+    for (let i = 0; i < 4; i++) {
+      const x = ((i + 0.5) / 4 - 0.5) * 0.09;
+      lock([x, S + 0.11, -0.01], [x * 1.1, S + 0.1 + 0.012 * hash(i, 5), 0.1], 0.026);
+    }
+  }
+  if (style === 'hairCurly') {
+    // Curls: short blunt blades all over, pointing out.
+    // Tight curls all over: dozens of short blunt tufts standing off the cap, in rings, so
+    // the silhouette is lumpy all the way round rather than a smooth dome.
+    for (let ring = 0; ring < 4; ring++) {
+      const y = 0.0 + ring * 0.035;
+      const count = 12 - ring * 2;
+      for (let i = 0; i < count; i++) {
+        const phi = (2 * Math.PI * (i + (ring % 2) * 0.5)) / count + 0.2 * hash(i, ring);
+        if (Math.cos(phi) > 0.55 && y < 0.045) continue; // not over the face
+        const [x0, z0] = headSurface(y, phi, 0.02);
+        const [x1, z1] = headSurface(y + 0.008, phi, 0.042 + 0.01 * hash(ring, i));
+        lock([x0, S + y, z0], [x1, S + y + 0.01, z1], 0.02);
+      }
+    }
+  }
+  if (style === 'hairBun') {
+    // A knot at the back of the crown.
+    const cx = 0, cy = S + 0.1, cz = -0.105;
+    const ring: number[] = [];
+    for (let k = 0; k < 6; k++) {
+      const a = (2 * Math.PI * k) / 6;
+      ring.push(add(cx + Math.cos(a) * 0.036, cy + Math.sin(a) * 0.036, cz));
+    }
+    const back = add(cx, cy, cz - 0.04);
+    const front = add(cx, cy, cz + 0.03);
+    for (let k = 0; k < 6; k++) {
+      tri(back, ring[(k + 1) % 6] as number, ring[k] as number);
+      tri(front, ring[k] as number, ring[(k + 1) % 6] as number);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  const flat = g.toNonIndexed();
+  g.dispose();
+  // Every face wound outward from the middle of the head.
+  const p = flat.getAttribute('position') as THREE.BufferAttribute;
+  const mid = new THREE.Vector3(0, S + 0.01, -0.01);
+  const A = new THREE.Vector3(), Bv = new THREE.Vector3(), C = new THREE.Vector3();
+  for (let t = 0; t < p.count; t += 3) {
+    A.fromBufferAttribute(p, t);
+    Bv.fromBufferAttribute(p, t + 1);
+    C.fromBufferAttribute(p, t + 2);
+    const nrm = new THREE.Vector3().crossVectors(Bv.clone().sub(A), C.clone().sub(A));
+    const c = A.clone().add(Bv).add(C).divideScalar(3).sub(mid);
+    if (nrm.dot(c) < 0) {
+      p.setXYZ(t + 1, C.x, C.y, C.z);
+      p.setXYZ(t + 2, Bv.x, Bv.y, Bv.z);
+    }
+  }
+  flat.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(p.count * 3).fill(1), 3));
+  flat.computeVertexNormals();
+  return flat;
 }

@@ -50,10 +50,10 @@ function pick<T>(list: readonly T[], id: number, salt: number): T {
 }
 
 /**
- * Haircuts, as HAIR_STYLES indices (crop, short, quiff, curly, bun), weighted the way a
- * squad actually looks: mostly short, a few of everything else.
+ * Haircuts, as HAIR_STYLES indices (crop, short, quiff, curly, bun, fade, long, bald),
+ * weighted the way a squad actually looks: mostly short or faded, a few of everything else.
  */
-const HAIRCUTS: readonly number[] = [0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4];
+const HAIRCUTS: readonly number[] = [0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 5, 5, 5, 6, 7];
 
 /**
  * A number that reads against a shirt: the kit's second colour when that contrasts, else
