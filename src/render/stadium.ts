@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { PITCH_LENGTH, PITCH_WIDTH } from '../sim/match/pitch.js';
-import { crowdTexture } from './textures.js';
+import { concreteTexture, crowdTexture, glazingTextures, roofSheetTexture } from './textures.js';
 import { SURROUND } from './pitch.js';
 
 /**
@@ -22,6 +22,31 @@ export const WALL_HEIGHT = 1.5;
 export const ROOF_HEIGHT = 16.5;
 /** How far the roof reaches forward from the back wall. */
 const ROOF_DEPTH = 10;
+/**
+ * The two tiers. The lower tier rises from the front wall to the hospitality boxes; the
+ * boxes are a glazed step; the upper tier starts on top of them and finishes exactly where
+ * the single rake used to, so the bowl's envelope — which the cameras are placed against —
+ * is unchanged. The upper tier is steeper than the lower, as it is in every real ground.
+ */
+const LOWER_DEPTH = 12;
+const LOWER_RISE = 4.8;
+/** The glazed boxes, then the parapet above them that carries the second LED ribbon. */
+const BOX_GLASS = 1.9;
+const BOX_PARAPET = 0.8;
+const UPPER_FRONT = WALL_HEIGHT + LOWER_RISE + BOX_GLASS + BOX_PARAPET;
+/** Seats are about 0.8 metres a row. */
+const ROW_PITCH = 0.8;
+/** A crowd sheet's tile, metres along the stand, and the seats across one. */
+const CROWD_TILE = 26;
+const CROWD_COLS = 34;
+/** Metres of LED board per repeat of its 2048px texture: 8 panels of 6m. */
+const LED_TILE = 48;
+/** Metres of glazing per repeat of its texture: 16 panes of 2m. */
+const GLASS_TILE = 32;
+/** Metres per repeat of the concrete and roof-sheet textures. */
+const CONCRETE_TILE = 8;
+const SHEET_TILE = 3;
+
 /** Metres from the touchline to the advertising hoardings. */
 const HOARDING_INSET = 3.4;
 const HOARDING_HEIGHT = 0.95;
@@ -50,6 +75,10 @@ export class Stadium {
   /** The LED boards' texture (scrolled) and material (brighter under lights). */
   #ledTex: THREE.Texture | null = null;
   #ledMat: THREE.MeshStandardMaterial | null = null;
+  /** The hospitality boxes' glass: lit rooms are brighter at night. */
+  readonly #glassMats: THREE.MeshStandardMaterial[] = [];
+  /** Crowd sheets by rows, shade and variant: see `#crowdMaterial`. */
+  readonly #sheets = new Map<string, THREE.CanvasTexture>();
   /** Shared by every crowd sheet's shader: time, how excited, and whether it is night. */
   readonly #crowdUniforms = {
     uTime: { value: 0 },
@@ -74,8 +103,10 @@ export class Stadium {
   constructor(seed: number, colors: StadiumColors = { primary: 0x2f8f43, secondary: 0xffffff }) {
     this.group.name = 'stadium';
 
-    const concrete = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.94 });
-    const deck = new THREE.MeshStandardMaterial({ color: 0x6f7883, roughness: 0.95 });
+    const concreteTex = concreteTexture();
+    const concrete = new THREE.MeshStandardMaterial({ color: 0xa3abb4, roughness: 0.94, map: concreteTex });
+    const deck = new THREE.MeshStandardMaterial({ color: 0x78818c, roughness: 0.95, map: concreteTex });
+    this.#disposables.push(concreteTex);
     // Two roof materials, because a roof is seen from both sides in the same match. The
     // FAR stand's roof is seen from underneath and has to be light enough not to read as
     // a black bar across the top of the frame; the NEAR stand's is seen from above by the
@@ -89,10 +120,27 @@ export class Stadium {
     // every wide shot (see the comment on roofMat above).
     const roofTop = new THREE.Color(colors.roof ?? 0x2f3944);
     if (colors.roof !== undefined) roofTop.lerp(new THREE.Color(0x2f3944), 0.33);
-    const roofTopMat = new THREE.MeshStandardMaterial({ color: roofTop, roughness: 0.62, metalness: 0.12 });
-    this.#disposables.push(roofTopMat);
+    // Profiled sheeting, so the near roof has ribs rather than being a flat slab.
+    const sheetTex = roofSheetTexture();
+    const roofTopMat = new THREE.MeshStandardMaterial({ color: roofTop, roughness: 0.62, metalness: 0.12, map: sheetTex });
+    this.#disposables.push(roofTopMat, sheetTex);
     const steel = new THREE.MeshStandardMaterial({ color: 0xb9c1c9, roughness: 0.5, metalness: 0.3 });
-    this.#disposables.push(concrete, deck, roofMat, steel);
+    // The fascia along the front of the roof: the club colour, the band every ground is
+    // recognised by from the far side.
+    const fasciaCol = new THREE.Color(colors.primary).lerp(new THREE.Color(0x20262d), 0.3);
+    const fascia = new THREE.MeshStandardMaterial({ color: fasciaCol, roughness: 0.55, metalness: 0.2 });
+    // The ring of lights under the fascia. A modern ground lights the pitch from its roof,
+    // and at night that ring is what the whole bowl is lit by.
+    const ringTex = lampGridTexture();
+    ringTex.wrapS = THREE.RepeatWrapping;
+    const ring = new THREE.MeshStandardMaterial({
+      color: 0x20242a, roughness: 0.3, metalness: 0.2, side: THREE.DoubleSide,
+      emissive: 0xfff6e0, emissiveMap: ringTex, emissiveIntensity: 0.35,
+    });
+    this.#lampMats.push(ring);
+    this.#disposables.push(concrete, deck, roofMat, steel, fascia, ringTex, ring);
+    const led = this.#makeLed(colors);
+    const parts: StandParts = { concrete, deck, soffit: roofMat, sheeting: roofTopMat, steel, fascia, ring, led };
 
     const halfL = BOWL_HALF_LENGTH;
     const halfW = BOWL_HALF_WIDTH;
@@ -108,21 +156,21 @@ export class Stadium {
     // whole of the game's first version.
     const sideWidth = PITCH_LENGTH + SURROUND * 2;
     const endWidth = PITCH_WIDTH + SURROUND * 2;
-    const roofs: [THREE.Material, THREE.Material] = [roofMat, roofTopMat];
-    this.#addStand(concrete, deck, roofs, steel, sideWidth, seed + 1, colors, 0, halfW, 0);
-    this.#addStand(concrete, deck, roofs, steel, sideWidth, seed + 2, colors, 0, -halfW, Math.PI);
-    this.#addStand(concrete, deck, roofs, steel, endWidth, seed + 3, colors, halfL, 0, Math.PI / 2);
-    this.#addStand(concrete, deck, roofs, steel, endWidth, seed + 4, colors, -halfL, 0, -Math.PI / 2);
+    this.#addStand(parts, sideWidth, seed + 1, colors, 0, halfW, 0);
+    this.#addStand(parts, sideWidth, seed + 2, colors, 0, -halfW, Math.PI);
+    this.#addStand(parts, endWidth, seed + 3, colors, halfL, 0, Math.PI / 2);
+    this.#addStand(parts, endWidth, seed + 4, colors, -halfL, 0, -Math.PI / 2);
 
     // The corners. Four rectangular stands leave four diagonal holes with sky behind them,
     // and a hole in a stadium reads as a mistake from every camera angle that catches one.
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
-        this.#addCorner(concrete, deck, roofTopMat, seed + 10 + sx + sz * 2, colors, sx * halfL, sz * halfW);
+        this.#addCorner(parts, seed + 10 + sx + sz * 2, colors, sx * halfL, sz * halfW);
       }
     }
 
-    this.#addHoardings(colors);
+    this.#addHoardings();
+    this.#addDugouts(colors);
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         this.#addFloodlight(steel, sx * (halfL + 4), sz * (halfW + 4));
@@ -138,19 +186,46 @@ export class Stadium {
         top: { value: new THREE.Color(0x3f8fd8) },
         mid: { value: new THREE.Color(0x9fcdec) },
         bottom: { value: new THREE.Color(0xe8f1f6) },
+        uTime: { value: 0 },
       },
       vertexShader: `
-        varying float vH;
+        varying vec3 vDir;
         void main() {
           vec4 world = modelMatrix * vec4(position, 1.0);
-          vH = normalize(world.xyz).y;
+          vDir = world.xyz;
           gl_Position = projectionMatrix * viewMatrix * world;
         }`,
+      // Clouds: a few octaves of value noise projected onto a flat layer overhead, so they
+      // bunch up and flatten toward the horizon the way a real cloud deck does, drifting
+      // slowly. Their colour comes from the sky's own gradient, so an overcast grey sky
+      // gets grey cloud, a clear one gets white, and a night sky gets dark shapes against
+      // the dark rather than lit ones.
       fragmentShader: `
-        uniform vec3 top; uniform vec3 mid; uniform vec3 bottom; varying float vH;
+        uniform vec3 top; uniform vec3 mid; uniform vec3 bottom; uniform float uTime;
+        varying vec3 vDir;
+        float sh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float sn(vec2 p) {
+          vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(sh(i), sh(i + vec2(1.0, 0.0)), u.x), mix(sh(i + vec2(0.0, 1.0)), sh(i + vec2(1.0, 1.0)), u.x), u.y);
+        }
+        float fbm(vec2 p) {
+          float a = 0.5; float s = 0.0;
+          for (int i = 0; i < 5; i++) { s += a * sn(p); p = p * 2.03 + 17.0; a *= 0.5; }
+          return s;
+        }
         void main() {
+          vec3 d = normalize(vDir);
+          float vH = d.y;
           float h = clamp(vH * 1.25 + 0.18, 0.0, 1.0);
           vec3 c = h < 0.5 ? mix(bottom, mid, h * 2.0) : mix(mid, top, (h - 0.5) * 2.0);
+          if (d.y > 0.0) {
+            vec2 uv = d.xz / (d.y + 0.1) * 1.6 + vec2(uTime * 0.006, uTime * 0.0025);
+            float n = fbm(uv);
+            float cover = smoothstep(0.5, 0.78, n) * smoothstep(0.0, 0.22, d.y);
+            float shadeN = fbm(uv * 2.3 + 5.0);
+            vec3 cloud = max(mid, bottom) * (0.86 + shadeN * 0.3);
+            c = mix(c, cloud, cover * 0.85);
+          }
           gl_FragColor = vec4(c, 1.0);
           // Through the same tone curve and colour space as everything else, so the sky is
           // the same sky with and without the post chain (post.ts) — before these two lines
@@ -190,6 +265,7 @@ export class Stadium {
       m.emissiveIntensity = on ? 5.5 : 0.35;
     }
     if (this.#ledMat) this.#ledMat.emissiveIntensity = on ? 1.7 : 0.95;
+    for (const m of this.#glassMats) m.emissiveIntensity = on ? 1.5 : 0.1;
     this.#crowdUniforms.uNight.value = on ? 1 : 0;
   }
 
@@ -239,6 +315,7 @@ export class Stadium {
       m.map.offset.y = y;
     }
     this.#crowdUniforms.uTime.value = this.#t;
+    if (this.#skyMat) (this.#skyMat.uniforms.uTime as { value: number }).value = this.#t;
     this.#crowdUniforms.uExcite.value = Math.min(1, this.#danger * 0.45 + this.#roar + this.#buzz * 0.75);
     // The boards scroll, and scroll faster when something has happened.
     if (this.#ledTex) this.#ledTex.offset.x = (this.#ledTex.offset.x + dt * (0.018 + this.#roar * 0.12)) % 1;
@@ -251,16 +328,36 @@ export class Stadium {
 
   // ---- pieces -----------------------------------------------------------------
 
-  #crowdMaterial(width: number, rake: number, seed: number, colors: StadiumColors): THREE.MeshStandardMaterial {
+  #crowdMaterial(width: number, rake: number, seed: number, colors: StadiumColors, shade: number): THREE.MeshStandardMaterial {
     // Each stand gets its own sheet so the people come out the same size on a 119-metre
     // side stand and an 82-metre end. Sharing one un-repeated texture stretches thirty
     // spectators across the whole length of the pitch.
-    const tex = crowdTexture(512, seed, colors.primary, colors.secondary);
+    const rows = Math.max(6, Math.round(rake / ROW_PITCH));
+    // Three sheets per tier, shared round the ground: each material takes a clone, and a
+    // clone shares its canvas and its GPU upload, so this is three textures a tier rather
+    // than sixteen megabyte-sized ones.
+    const key = `${rows}|${shade}|${seed % 3}`;
+    let sheet = this.#sheets.get(key);
+    if (!sheet) {
+      sheet = crowdTexture({
+        width: 1024,
+        height: Math.min(1024, Math.max(256, rows * 36)),
+        rows,
+        cols: CROWD_COLS,
+        seed,
+        primary: colors.primary,
+        secondary: colors.secondary,
+        shade,
+      });
+      this.#sheets.set(key, sheet);
+      this.#disposables.push(sheet);
+    }
+    const tex = sheet.clone();
     tex.wrapS = THREE.RepeatWrapping;
     // Vertically the sheet covers the whole rake exactly once: it carries a baked roof
     // shade from the back rows down to the front, and a repeat would band it.
     tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.repeat.set(Math.max(1, Math.round(width / 26)), 1);
+    tex.repeat.set(Math.max(1, Math.round(width / CROWD_TILE)), 1);
     // A stand seen from the far side of the pitch is a few pixels tall, and an unfiltered
     // crowd at that size is television static. Mipmaps and anisotropy are what turn it
     // back into a crowd.
@@ -275,7 +372,7 @@ export class Stadium {
     const mat = new THREE.MeshStandardMaterial({
       map: tex, roughness: 1, metalness: 0, side: THREE.DoubleSide,
     });
-    this.#liveCrowd(mat, tex.repeat.x);
+    this.#liveCrowd(mat, tex.repeat.x, rows);
     this.#crowdMats.push(mat);
     this.#disposables.push(tex, mat);
     return mat;
@@ -290,7 +387,7 @@ export class Stadium {
    * a frame, which the bloom turns into points of light, and which after a goal is the
    * whole stand at once.
    */
-  #liveCrowd(mat: THREE.MeshStandardMaterial, repeat: number): void {
+  #liveCrowd(mat: THREE.MeshStandardMaterial, repeat: number, rows: number): void {
     const u = this.#crowdUniforms;
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = u.uTime;
@@ -307,16 +404,16 @@ export class Stadium {
         .replace('#include <map_fragment>', `
           #ifdef USE_MAP
             vec2 tlUv = vMapUv;
-            // A column of people is about a 64th of one tile of the sheet.
-            float tlCol = floor(tlUv.x * 64.0);
+            // Each column of seats bobs to its own rhythm.
+            float tlCol = floor(tlUv.x * ${CROWD_COLS.toFixed(1)});
             float tlBob = sin(uTime * (7.0 + tlCH(vec2(tlCol, 1.0)) * 5.0) + tlCol * 0.7);
-            tlUv.y += max(tlBob, 0.0) * (0.0015 + uExcite * 0.009);
+            tlUv.y += max(tlBob, 0.0) * (0.0015 + uExcite * 0.009) * ${(30 / rows).toFixed(3)};
             // The wave: a band of the stand on its feet, arms up, travelling along it.
             float tlWave = 0.0;
             if (uWave > -0.5) {
               float along = vMapUv.x / ${repeat.toFixed(1)};
               tlWave = smoothstep(0.07, 0.0, abs(along - uWave));
-              tlUv.y += tlWave * 0.018;
+              tlUv.y += tlWave * ${(0.018 * 30 / rows).toFixed(4)};
             }
             vec4 sampledDiffuseColor = texture2D(map, tlUv);
             diffuseColor *= sampledDiffuseColor;
@@ -326,7 +423,7 @@ export class Stadium {
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
           #ifdef USE_MAP
           {
-            vec2 cell = floor(vMapUv * vec2(${(64 * repeat).toFixed(1)}, 40.0));
+            vec2 cell = floor(vMapUv * vec2(${(CROWD_COLS * repeat).toFixed(1)}, ${rows.toFixed(1)}));
             float slot = floor(uTime * 9.0);
             float h = tlCH(cell + slot * 0.137);
             float rate = mix(0.9993, 0.985, uExcite) - uNight * 0.0004;
@@ -335,6 +432,31 @@ export class Stadium {
           }
           #endif`);
     };
+  }
+
+  /** The LED material, shared by the pitch-side boards and the ribbon between the tiers. */
+  #makeLed(colors: StadiumColors): THREE.MeshStandardMaterial {
+    const tex = this.#ledTexture(colors);
+    const led = new THREE.MeshStandardMaterial({
+      color: 0x000000, roughness: 0.35, metalness: 0, map: null, side: THREE.DoubleSide,
+      emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.95,
+    });
+    this.#ledTex = tex;
+    this.#ledMat = led;
+    this.#disposables.push(tex, led);
+    return led;
+  }
+
+  /** The glass of the hospitality boxes: dark by day, lit rooms glowing at night. */
+  #glassMaterial(seed: number): THREE.MeshStandardMaterial {
+    const { map, glow } = glazingTextures(seed);
+    const mat = new THREE.MeshStandardMaterial({
+      map, roughness: 0.18, metalness: 0.55, side: THREE.DoubleSide,
+      emissive: 0xffffff, emissiveMap: glow, emissiveIntensity: 0.1,
+    });
+    this.#glassMats.push(mat);
+    this.#disposables.push(map, glow, mat);
+    return mat;
   }
 
   /** The LED strip's picture: the club's colours and name, in panels, drawn once. */
@@ -409,12 +531,51 @@ export class Stadium {
     return tex;
   }
 
+  /**
+   * A flat raked surface from (z0, y0) to (z1, y1) in a stand's own frame, `width` wide.
+   * Low at the front, high at the back — which is which is not obvious from the sign. The
+   * other rotation rakes the stand BACKWARDS: twelve metres of seating at the touchline
+   * dropping to one at the back, so every stand is a wall from the pitch and the crowd is
+   * hidden behind its own front row. That is how this first looked.
+   */
+  #rake(parent: THREE.Object3D, mat: THREE.Material, width: number, z0: number, y0: number, z1: number, y1: number): void {
+    const len = Math.hypot(z1 - z0, y1 - y0);
+    const geo = new THREE.PlaneGeometry(width, len);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = Math.PI / 2 - Math.atan2(y1 - y0, z1 - z0);
+    mesh.position.set(0, (y0 + y1) / 2, (z0 + z1) / 2);
+    parent.add(mesh);
+    this.#disposables.push(geo);
+  }
+
+  /**
+   * A vertical strip from (x0, z0) to (x1, z1), `height` tall from `y`, its texture
+   * repeating every `tile` metres along it. The boxes' glass, the LED ribbon, the concourse.
+   */
+  #strip(parent: THREE.Object3D, mat: THREE.Material, x0: number, z0: number, x1: number, z1: number, y: number, height: number, tile: number): void {
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    const geo = new THREE.PlaneGeometry(len, height);
+    const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (len / tile));
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set((x0 + x1) / 2, y + height / 2, (z0 + z1) / 2);
+    mesh.rotation.y = -Math.atan2(z1 - z0, x1 - x0);
+    parent.add(mesh);
+    this.#disposables.push(geo);
+  }
+
+  /** A box, textured in world metres rather than stretched once across each face. */
+  #block(parent: THREE.Object3D, mat: THREE.Material | THREE.Material[], sx: number, sy: number, sz: number, x: number, y: number, z: number, tile = CONCRETE_TILE): THREE.Mesh {
+    const geo = boxUvInMetres(new THREE.BoxGeometry(sx, sy, sz), tile);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    parent.add(mesh);
+    this.#disposables.push(geo);
+    return mesh;
+  }
+
   #addStand(
-    concrete: THREE.Material,
-    deck: THREE.Material,
-    /** [soffit, sheeting] — the underside and the top of the roof are different greys. */
-    roofs: [THREE.Material, THREE.Material],
-    steel: THREE.Material,
+    p: StandParts,
     width: number,
     seed: number,
     colors: StadiumColors,
@@ -425,49 +586,35 @@ export class Stadium {
     const stand = new THREE.Group();
 
     // The pitch-side wall, at the front.
-    const wallGeo = new THREE.BoxGeometry(width, WALL_HEIGHT, 0.5);
-    const wall = new THREE.Mesh(wallGeo, deck);
-    wall.position.set(0, WALL_HEIGHT / 2, 0.25);
-    stand.add(wall);
-    this.#disposables.push(wallGeo);
+    this.#block(stand, p.deck, width, WALL_HEIGHT, 0.5, 0, WALL_HEIGHT / 2, 0.25);
 
-    // The seating: a raked plane going up and back.
-    const rake = Math.hypot(STAND_DEPTH, STAND_HEIGHT);
-    const seatGeo = new THREE.PlaneGeometry(width, rake);
-    const seats = new THREE.Mesh(seatGeo, this.#crowdMaterial(width, rake, seed, colors));
-    // Low at the front, high at the back — which is which is not obvious from the sign.
-    // The other rotation rakes the stand BACKWARDS: twelve metres of seating at the
-    // touchline dropping to one at the back, so every stand is a wall from the pitch and
-    // the crowd is hidden behind its own front row. That is how this first looked.
-    seats.rotation.x = Math.PI / 2 - Math.atan2(STAND_HEIGHT, STAND_DEPTH);
-    seats.position.set(0, WALL_HEIGHT + STAND_HEIGHT / 2, STAND_DEPTH / 2);
-    stand.add(seats);
-    this.#disposables.push(seatGeo);
+    // The lower tier, the glazed boxes, the parapet with its LED ribbon, the upper tier.
+    const lowTop = WALL_HEIGHT + LOWER_RISE;
+    const lowRake = Math.hypot(LOWER_DEPTH, LOWER_RISE);
+    this.#rake(stand, this.#crowdMaterial(width, lowRake, seed, colors, 0.25), width, 0, WALL_HEIGHT, LOWER_DEPTH, lowTop);
+    this.#strip(stand, this.#glassMaterial(seed ^ 0x9e37), width / 2, LOWER_DEPTH, -width / 2, LOWER_DEPTH, lowTop, BOX_GLASS, GLASS_TILE);
+    this.#strip(stand, p.led, width / 2, LOWER_DEPTH - 0.02, -width / 2, LOWER_DEPTH - 0.02, lowTop + BOX_GLASS, BOX_PARAPET, LED_TILE);
+    const upTop = WALL_HEIGHT + STAND_HEIGHT;
+    const upRake = Math.hypot(STAND_DEPTH - LOWER_DEPTH, upTop - UPPER_FRONT);
+    this.#rake(stand, this.#crowdMaterial(width, upRake, seed + 101, colors, 1), width, LOWER_DEPTH, UPPER_FRONT, STAND_DEPTH, upTop);
 
     // A roof over the back, which is what gives a stadium its silhouette. Over the back
     // only: a roof that reaches further forward hides the crowd from any camera above it,
     // and the far stand becomes a plain dark band.
-    const roofGeo = new THREE.BoxGeometry(width, 0.5, ROOF_DEPTH);
+    //
     // [top, bottom, ...] is the BoxGeometry material order after +X and -X: the sheeting
     // on top is dark, the soffit underneath stays light.
-    const [soffit, sheeting] = roofs;
-    const roof = new THREE.Mesh(roofGeo, [soffit, soffit, sheeting, soffit, soffit, soffit]);
-    roof.position.set(0, ROOF_HEIGHT, STAND_DEPTH - ROOF_DEPTH / 2 + 1);
-    stand.add(roof);
-    this.#disposables.push(roofGeo);
+    const roofZ = STAND_DEPTH - ROOF_DEPTH / 2 + 1;
+    const roofFront = roofZ - ROOF_DEPTH / 2;
+    this.#block(stand, [p.soffit, p.soffit, p.sheeting, p.soffit, p.soffit, p.soffit], width, 0.5, ROOF_DEPTH, 0, ROOF_HEIGHT, roofZ, SHEET_TILE);
+    this.#roofEdge(stand, p, width / 2, roofFront, -width / 2, roofFront, 0, -1);
 
-    // Standing seams along the roof, so it reads as sheeting rather than as a slab. Six
-    // draw calls for the whole ground and they are what stops the near roof being the
-    // flattest object on screen.
+    // Standing seams along the roof, so it reads as sheeting rather than as a slab.
     const seamGeo = new THREE.BoxGeometry(0.22, 0.12, ROOF_DEPTH - 0.4);
     const seams = Math.max(4, Math.round(width / 7));
     for (let i = 0; i < seams; i++) {
-      const seam = new THREE.Mesh(seamGeo, steel);
-      seam.position.set(
-        ((i + 0.5) / seams - 0.5) * width,
-        ROOF_HEIGHT + 0.3,
-        STAND_DEPTH - ROOF_DEPTH / 2 + 1,
-      );
+      const seam = new THREE.Mesh(seamGeo, p.steel);
+      seam.position.set(((i + 0.5) / seams - 0.5) * width, ROOF_HEIGHT + 0.3, roofZ);
       stand.add(seam);
     }
     this.#disposables.push(seamGeo);
@@ -477,20 +624,18 @@ export class Stadium {
     const trussGeo = new THREE.BoxGeometry(0.4, ROOF_HEIGHT - STAND_HEIGHT, 0.4);
     const trussCount = Math.max(3, Math.round(width / 24));
     for (let i = 0; i < trussCount; i++) {
-      const truss = new THREE.Mesh(trussGeo, steel);
+      const truss = new THREE.Mesh(trussGeo, p.steel);
       const u = trussCount === 1 ? 0.5 : i / (trussCount - 1);
       truss.position.set((u - 0.5) * (width - 6), (ROOF_HEIGHT + STAND_HEIGHT) / 2, STAND_DEPTH + 0.6);
       stand.add(truss);
     }
     this.#disposables.push(trussGeo);
 
-    // The back wall, closing the bowl off against the sky.
+    // The back wall, closing the bowl off against the sky, with the concourse glazing
+    // along the strip of it that shows between the back row and the roof.
     const backH = ROOF_HEIGHT + 1.2;
-    const backGeo = new THREE.BoxGeometry(width, backH, 0.7);
-    const back = new THREE.Mesh(backGeo, concrete);
-    back.position.set(0, backH / 2, STAND_DEPTH + 1.2);
-    stand.add(back);
-    this.#disposables.push(backGeo);
+    this.#block(stand, p.concrete, width, backH, 0.7, 0, backH / 2, STAND_DEPTH + 1.2);
+    this.#strip(stand, this.#glassMaterial(seed ^ 0x51f1), width / 2, STAND_DEPTH + 0.84, -width / 2, STAND_DEPTH + 0.84, upTop + 0.2, ROOF_HEIGHT - upTop - 0.5, GLASS_TILE);
 
     stand.position.set(x, 0, z);
     stand.rotation.y = rotY;
@@ -498,62 +643,109 @@ export class Stadium {
   }
 
   /**
-   * A corner infill: the block that closes the diagonal gap where two stands meet.
-   *
-   * The block on its own was a mistake worth recording. From any camera inside the ground
-   * it presents two blank concrete faces where a crowd should be, and because it is the
-   * tallest thing between two stands it draws the eye straight to the one part of the
-   * stadium with nobody in it. So the diagonal gets a raked crowd wedge across it, which
-   * is what a real corner section looks like and costs one more plane.
+   * The front edge of a roof, from (x0, z0) to (x1, z1): the fascia, and the lights under
+   * it, tilted down toward the pitch, which lies along (`toX`, `toZ`) from the edge.
    */
-  #addCorner(
-    concrete: THREE.Material,
-    deck: THREE.Material,
-    roofMat: THREE.Material,
-    seed: number,
-    colors: StadiumColors,
-    x: number,
-    z: number,
-  ): void {
+  #roofEdge(parent: THREE.Object3D, p: StandParts, x0: number, z0: number, x1: number, z1: number, toX: number, toZ: number): void {
+    // A plane turned by -atan2(dz, dx) faces (-dz, dx); run the edge the other way if
+    // that is away from the pitch.
+    if (-(z1 - z0) * toX + (x1 - x0) * toZ < 0) [x0, z0, x1, z1] = [x1, z1, x0, z0];
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    const fascia = this.#block(parent, p.fascia, len, 1.3, 0.25, 0, 0, 0);
+    fascia.position.set((x0 + x1) / 2, ROOF_HEIGHT - 0.1, (z0 + z1) / 2);
+    fascia.rotation.y = -Math.atan2(z1 - z0, x1 - x0);
+    const geo = new THREE.PlaneGeometry(len, 0.7);
+    const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+    // One bank of lamps every six metres.
+    for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (len / 6));
+    const lamps = new THREE.Mesh(geo, p.ring);
+    // Tilted to face down and in, toward the pitch.
+    lamps.rotation.order = 'YXZ';
+    lamps.rotation.y = -Math.atan2(z1 - z0, x1 - x0);
+    lamps.rotation.x = 1.0;
+    lamps.position.set((x0 + x1) / 2, ROOF_HEIGHT - 0.85, (z0 + z1) / 2);
+    const inward = new THREE.Vector3(0, 0, -0.35).applyAxisAngle(new THREE.Vector3(0, 1, 0), fascia.rotation.y);
+    lamps.position.add(inward);
+    parent.add(lamps);
+    this.#disposables.push(geo);
+  }
+
+  /**
+   * A corner: the quarter of the bowl where two stands meet.
+   *
+   * The first version was a concrete block with a crowd wedge across its diagonal, and
+   * from any camera inside the ground it presented two blank faces where a crowd should
+   * be. This one is what a real square corner is: the seating of both neighbouring
+   * stands carried on round until the two meet along the diagonal, so every row runs
+   * unbroken from one stand into the next. A point `dx`, `dz` into the corner is at the
+   * height the stand profile gives for max(dx, dz), which is exactly what makes it
+   * continuous with both — the end stand along one edge and the side stand along the other.
+   */
+  #addCorner(p: StandParts, seed: number, colors: StadiumColors, x: number, z: number): void {
     const g = new THREE.Group();
-    const size = STAND_DEPTH + 1.9;
     const sx = Math.sign(x);
     const sz = Math.sign(z);
+    const D = STAND_DEPTH;
+    const L = LOWER_DEPTH;
+    const lowTop = WALL_HEIGHT + LOWER_RISE;
+    const upTop = WALL_HEIGHT + STAND_HEIGHT;
 
-    const boxGeo = new THREE.BoxGeometry(size, ROOF_HEIGHT + 1.2, size);
-    const box = new THREE.Mesh(boxGeo, concrete);
-    box.position.set(sx * size / 2, (ROOF_HEIGHT + 1.2) / 2, sz * size / 2);
-    g.add(box);
-    this.#disposables.push(boxGeo);
+    const lower = this.#crowdMaterial(D, Math.hypot(L, LOWER_RISE), seed, colors, 0.25);
+    const upper = this.#crowdMaterial(D, Math.hypot(D - L, upTop - UPPER_FRONT), seed + 101, colors, 1);
+    // Each tier is two quads, one either side of the diagonal. `a` is distance out along
+    // the profile, `b` distance along the rows, from the diagonal (so the stairway at
+    // u = 0 in the crowd sheet runs up the crease, which is where a real one is).
+    const tier = (mat: THREE.Material, d0: number, y0: number, d1: number, y1: number): void => {
+      const pos: number[] = [];
+      const uvs: number[] = [];
+      for (const swap of [false, true]) {
+        const quad: [number, number][] = [[d0, 0], [d1, 0], [d1, d1], [d0, d0]];
+        const pts = quad.map(([a, b]) => {
+          const dx = swap ? b : a;
+          const dz = swap ? a : b;
+          const y = y0 + ((a - d0) / (d1 - d0)) * (y1 - y0);
+          return { p: [sx * dx, y, sz * dz], uv: [(a - b) / D, (a - d0) / (d1 - d0)] };
+        });
+        for (const i of [0, 1, 2, 0, 2, 3]) {
+          const v = pts[i] as { p: number[]; uv: number[] };
+          pos.push(...v.p);
+          uvs.push(...v.uv);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.computeVertexNormals();
+      g.add(new THREE.Mesh(geo, mat));
+      this.#disposables.push(geo);
+    };
+    tier(lower, 0, WALL_HEIGHT, L, lowTop);
+    tier(upper, L, UPPER_FRONT, D, upTop);
 
-    // A cap, so the corner does not read as a bare cube against the sky.
-    const capGeo = new THREE.BoxGeometry(size + 1.4, 0.5, size + 1.4);
-    const cap = new THREE.Mesh(capGeo, roofMat);
-    cap.position.set(sx * size / 2, ROOF_HEIGHT + 1.2, sz * size / 2);
-    g.add(cap);
-    this.#disposables.push(capGeo);
+    // The boxes and the ribbon, turning the corner along the same crease.
+    const glass = this.#glassMaterial(seed ^ 0x9e37);
+    this.#strip(g, glass, sx * L, 0, sx * L, sz * L, lowTop, BOX_GLASS, GLASS_TILE);
+    this.#strip(g, glass, 0, sz * L, sx * L, sz * L, lowTop, BOX_GLASS, GLASS_TILE);
+    this.#strip(g, p.led, sx * (L - 0.02), 0, sx * (L - 0.02), sz * L, lowTop + BOX_GLASS, BOX_PARAPET, LED_TILE);
+    this.#strip(g, p.led, 0, sz * (L - 0.02), sx * L, sz * (L - 0.02), lowTop + BOX_GLASS, BOX_PARAPET, LED_TILE);
 
-    // A low kerb tying it into the two stand fronts.
-    const kerbGeo = new THREE.BoxGeometry(size, WALL_HEIGHT, size);
-    const kerb = new THREE.Mesh(kerbGeo, deck);
-    kerb.position.set(sx * size / 2, WALL_HEIGHT / 2, sz * size / 2);
-    g.add(kerb);
-    this.#disposables.push(kerbGeo);
+    // The back walls, an L round the outside, and the concourse glazing on them.
+    const backH = ROOF_HEIGHT + 1.2;
+    const outer = D + 1.2;
+    const span = outer + 0.35;
+    this.#block(g, p.concrete, 0.7, backH, span, sx * outer, backH / 2, sz * span / 2);
+    this.#block(g, p.concrete, span, backH, 0.7, sx * span / 2, backH / 2, sz * outer);
+    const cg = this.#glassMaterial(seed ^ 0x51f1);
+    this.#strip(g, cg, sx * (outer - 0.36), 0, sx * (outer - 0.36), sz * span, upTop + 0.2, ROOF_HEIGHT - upTop - 0.5, GLASS_TILE);
+    this.#strip(g, cg, 0, sz * (outer - 0.36), sx * span, sz * (outer - 0.36), upTop + 0.2, ROOF_HEIGHT - upTop - 0.5, GLASS_TILE);
 
-    // The crowd across the diagonal. Its width is the hypotenuse of the corner and it is
-    // raked at the same angle as the stands, so it lines up with both of its neighbours.
-    const rake = Math.hypot(STAND_DEPTH, STAND_HEIGHT);
-    const width = Math.SQRT2 * size * 0.94;
-    const seatGeo = new THREE.PlaneGeometry(width, rake);
-    const seats = new THREE.Mesh(seatGeo, this.#crowdMaterial(width, rake, seed, colors));
-    seats.rotation.order = 'YXZ';
-    // Facing the centre spot: 45 degrees round from the stand it sits between.
-    seats.rotation.y = Math.atan2(sx, sz);
-    seats.rotation.x = Math.PI / 2 - Math.atan2(STAND_HEIGHT, STAND_DEPTH);
-    const mid = STAND_DEPTH / 2 / Math.SQRT2;
-    seats.position.set(sx * mid, WALL_HEIGHT + STAND_HEIGHT / 2, sz * mid);
-    g.add(seats);
-    this.#disposables.push(seatGeo);
+    // The roof, also an L, over the back of both halves, and its front edge.
+    const roofFront = D - ROOF_DEPTH + 1;
+    const mats = [p.soffit, p.soffit, p.sheeting, p.soffit, p.soffit, p.soffit];
+    this.#block(g, mats, ROOF_DEPTH, 0.5, span, sx * (roofFront + ROOF_DEPTH / 2), ROOF_HEIGHT, sz * span / 2, SHEET_TILE);
+    this.#block(g, mats, roofFront, 0.5, ROOF_DEPTH, sx * roofFront / 2, ROOF_HEIGHT, sz * (roofFront + ROOF_DEPTH / 2), SHEET_TILE);
+    this.#roofEdge(g, p, sx * roofFront, 0, sx * roofFront, sz * roofFront, -sx, -sz);
+    this.#roofEdge(g, p, 0, sz * roofFront, sx * roofFront, sz * roofFront, -sx, -sz);
 
     g.position.set(x, 0, z);
     this.group.add(g);
@@ -565,7 +757,7 @@ export class Stadium {
    * purpose is advertising. They are here for the horizontal band of saturated colour at
    * the pitch edge, which is what stops the grass running straight into the concrete.
    */
-  #addHoardings(colors: StadiumColors): void {
+  #addHoardings(): void {
     const lengthX = PITCH_LENGTH + HOARDING_INSET * 2;
     const lengthZ = PITCH_WIDTH + HOARDING_INSET * 2;
     const zEdge = PITCH_WIDTH / 2 + HOARDING_INSET;
@@ -575,22 +767,14 @@ export class Stadium {
     // side, which is what a modern ground has rather than a row of painted boards. The
     // screen is emissive, so it holds its colour in shadow and glows under lights.
     const cabinet = new THREE.MeshStandardMaterial({ color: 0x1a2027, roughness: 0.5, metalness: 0.3 });
-    const tex = this.#ledTexture(colors);
-    const led = new THREE.MeshStandardMaterial({
-      color: 0x000000, roughness: 0.35, metalness: 0, map: null,
-      emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.95,
-    });
-    this.#ledTex = tex;
-    this.#ledMat = led;
-    this.#disposables.push(cabinet, tex, led);
-    /** Metres of board per repeat of the 2048px texture: 8 panels of 6m. */
-    const metresPerTile = 48;
+    const led = this.#ledMat as THREE.MeshStandardMaterial;
+    this.#disposables.push(cabinet);
 
     const side = (length: number, x: number, z: number, rotY: number): void => {
       const box = new THREE.BoxGeometry(length, HOARDING_HEIGHT, 0.3);
       const screen = new THREE.PlaneGeometry(length, HOARDING_HEIGHT * 0.84);
       const uv = screen.getAttribute('uv') as THREE.BufferAttribute;
-      for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (length / metresPerTile));
+      for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (length / LED_TILE));
       this.#disposables.push(box, screen);
       const g = new THREE.Group();
       const body = new THREE.Mesh(box, cabinet);
@@ -607,6 +791,55 @@ export class Stadium {
     side(lengthX, 0, -zEdge, 0);
     side(lengthZ, xEdge, 0, -Math.PI / 2);
     side(lengthZ, -xEdge, 0, Math.PI / 2);
+  }
+
+  /**
+   * The two dugouts, either side of halfway on the near touchline, behind the boards: a
+   * back wall, a curved clear canopy and a row of padded seats in the home colour. Small,
+   * but they are the thing that says "this is a real ground" in every low replay shot.
+   */
+  #addDugouts(colors: StadiumColors): void {
+    const shell = new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.6, metalness: 0.2 });
+    const canopy = new THREE.MeshStandardMaterial({
+      color: 0xd8e8f4, roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.32,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    const seatMat = new THREE.MeshStandardMaterial({ color: colors.primary, roughness: 0.55 });
+    const length = 8;
+    const depth = 2.3;
+    const back = -(BOWL_HALF_WIDTH - 0.25);
+    const shellGeo = new THREE.BoxGeometry(length, 2.1, 0.12);
+    const endGeo = new THREE.BoxGeometry(0.1, 2.1, depth);
+    const floorGeo = new THREE.BoxGeometry(length, 0.12, depth);
+    // Half a cylinder with its axis along the dugout, open side down.
+    const canopyGeo = new THREE.CylinderGeometry(depth / 2, depth / 2, length, 20, 1, true, -Math.PI / 2, Math.PI);
+    canopyGeo.rotateZ(Math.PI / 2);
+    canopyGeo.scale(1, 0.55, 1);
+    const seatGeo = new THREE.BoxGeometry(0.5, 0.9, 0.55);
+    this.#disposables.push(shell, canopy, seatMat, shellGeo, endGeo, floorGeo, canopyGeo, seatGeo);
+    for (const cx of [-9, 9]) {
+      const g = new THREE.Group();
+      const wall = new THREE.Mesh(shellGeo, shell);
+      wall.position.set(0, 1.05, 0.06);
+      const floor = new THREE.Mesh(floorGeo, shell);
+      floor.position.set(0, 0.06, depth / 2);
+      g.add(wall, floor);
+      for (const ex of [-1, 1]) {
+        const end = new THREE.Mesh(endGeo, canopy);
+        end.position.set(ex * length / 2, 1.05, depth / 2);
+        g.add(end);
+      }
+      const roof = new THREE.Mesh(canopyGeo, canopy);
+      roof.position.set(0, 2.1, depth / 2);
+      g.add(roof);
+      for (let i = 0; i < 12; i++) {
+        const seat = new THREE.Mesh(seatGeo, seatMat);
+        seat.position.set(-length / 2 + 0.55 + i * ((length - 1.1) / 11), 0.55, 0.4);
+        g.add(seat);
+      }
+      g.position.set(cx, 0, back);
+      this.group.add(g);
+    }
   }
 
   /** A corner pylon. Silhouette only — the lighting in the scene is the sun. */
@@ -669,4 +902,39 @@ function lampGridTexture(): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+/** The materials every stand and corner is built from. */
+interface StandParts {
+  concrete: THREE.Material;
+  deck: THREE.Material;
+  /** The underside and the top of the roof are different greys. */
+  soffit: THREE.Material;
+  sheeting: THREE.Material;
+  steel: THREE.Material;
+  fascia: THREE.Material;
+  ring: THREE.Material;
+  led: THREE.Material;
+}
+
+/**
+ * Re-map a BoxGeometry's UVs to world metres, one texture repeat every `tile` metres,
+ * projected along each face's own axis. Without it a texture is stretched once across
+ * every face, so a 120-metre wall and a 4-metre kerb carry the same number of panels.
+ */
+function boxUvInMetres(geo: THREE.BoxGeometry, tile: number): THREE.BoxGeometry {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const nrm = geo.getAttribute('normal') as THREE.BufferAttribute;
+  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const nx = Math.abs(nrm.getX(i));
+    const ny = Math.abs(nrm.getY(i));
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    if (nx > 0.5) uv.setXY(i, z / tile, y / tile);
+    else if (ny > 0.5) uv.setXY(i, x / tile, z / tile);
+    else uv.setXY(i, x / tile, y / tile);
+  }
+  return geo;
 }

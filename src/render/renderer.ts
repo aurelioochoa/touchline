@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { clamp, clamp01, damp, invLerp, lerp, TAU, wrapAngle } from '../core/math.js';
 import { directionOf, type MatchEvent, type MatchState } from '../sim/match/types.js';
 import { TICK } from '../sim/match/physics.js';
+import { PITCH_LENGTH } from '../sim/match/pitch.js';
 import { BallView } from './ball.js';
 import { BroadcastCamera, dangerOf, type CameraMode, type CameraPreset } from './camera.js';
 import { Director } from './director.js';
@@ -183,6 +184,8 @@ export class RenderClient {
   #ballZ = 0;
   #ballX = 0;
   #ballY = 0;
+  /** Ball speed at the last tick, m/s: how hard a goal hits the net. */
+  #ballSpeed = 0;
   /** Where the ball is drawn: see ballMotion.ts for why that is not where the sim has it. */
   #ballMotion = new BallMotion(TICK);
   #ballDraw: BallDraw = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
@@ -602,6 +605,7 @@ export class RenderClient {
     this.#ballX = state.ball.x;
     this.#ballY = state.ball.y;
     this.#ballZ = state.ball.z;
+    this.#ballSpeed = Math.hypot(state.ball.vx, state.ball.vy, state.ball.vz);
   }
 
   /** The stands react: `lift` 0..1 (crowdReact.ts's standLift). */
@@ -620,6 +624,7 @@ export class RenderClient {
       case 'goal': {
         this.cam.kick(0.5);
         this.#stadium.roar();
+        this.#pitch.netHit(this.#ballX < PITCH_LENGTH / 2 ? 0 : 1, toSceneZ(this.#ballY), this.#ballZ, this.#ballSpeed);
         // The side that scored celebrates, whoever put it in; the other side does not.
         for (const v of this.#visuals) {
           if (!v.live || v.side === null) continue;
@@ -821,6 +826,7 @@ export class RenderClient {
     this.#ball.update(b.x, b.y, b.z, b.vx, b.vy, dt, b.vz);
     this.#stadium.setDanger(this.#danger);
     this.#stadium.update(dt);
+    this.#pitch.update(dt);
     this.#rain?.update(dt, this.cam.camera);
 
     const want = dangerOf(b.x, b.y);
