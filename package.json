@@ -1,0 +1,25 @@
+{
+  "name": "touchline",
+  "version": "0.1.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node scripts/check-styles.mjs && tsc --noEmit && vite build && node scripts/check-licenses.mjs",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:styles": "node scripts/check-styles.mjs"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.4",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="color-scheme" content="light" />
+    <title>Touchline</title>
+    <!-- Inline so the page requests nothing: without it every load logs a favicon 404,
+         which is noise in front of the "no console errors" ship gate. A data URI is not
+         an asset file, so the zero-asset licence gate still holds. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f8f43'/><rect x='4' y='7' width='24' height='18' rx='2' fill='none' stroke='%23ffffff' stroke-width='1.6'/><line x1='16' y1='7' x2='16' y2='25' stroke='%23ffffff' stroke-width='1.6'/><circle cx='16' cy='16' r='3.4' fill='none' stroke='%23ffffff' stroke-width='1.6'/></svg>"
+    />
+    <style>
+      :root { color-scheme: light; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #0d1b12;
+        overscroll-behavior: none;
+        touch-action: none;
+        -webkit-text-size-adjust: 100%;
+      }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+      /* Shown until the first rendered frame, then removed by main.ts. A boot
+         exception leaves the dash on screen rather than a dead black page. */
+      #boot-flash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 600 28px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #cfe8d6;
+        background: #0d1b12;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
