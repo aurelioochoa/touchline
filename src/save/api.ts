@@ -3,6 +3,8 @@
 import type { World } from '../sim/world/types.js';
 import { caOf } from '../sim/ratings/ability.js';
 import { buildTable, positionOf } from '../sim/career/fixtures.js';
+import { heroPlayer } from '../sim/player/hero.js';
+import { fullName } from '../sim/world/names.js';
 import {
   SAVE_VERSION,
   defaultSettings,
@@ -29,12 +31,14 @@ export type LoadResult =
   | { kind: 'too-new' };
 
 export function saveGame(world: World, settings: Settings, slot = 0): void {
-  const club = world.clubs[world.managedClubId];
+  const hero = heroPlayer(world);
+  const club = world.clubs[hero ? hero.clubId : world.managedClubId];
   const table = club ? buildTable(world, club.tier) : [];
-  const row = table.find((r) => r.clubId === world.managedClubId);
+  const row = table.find((r) => r.clubId === club?.id);
   const data: SaveData = {
     version: SAVE_VERSION,
     savedAt: Date.now(),
+    mode: world.hero ? 'player' : 'club',
     summary: {
       clubName: club?.name ?? '—',
       season: world.season,
@@ -43,7 +47,10 @@ export function saveGame(world: World, settings: Settings, slot = 0): void {
       position: club ? positionOf(world, club.id) : 0,
       points: row?.points ?? 0,
       ...(club ? { kitPrimary: club.kitPrimary, kitSecondary: club.kitSecondary } : {}),
-      ...(world.crest ? { crest: packCrest(world.crest) } : {}),
+      ...(world.crest && !hero ? { crest: packCrest(world.crest) } : {}),
+      ...(hero && world.hero
+        ? { mode: 'player', heroName: fullName(world.book, hero.firstIdx, hero.lastIdx), shirtNumber: world.hero.number, age: hero.age }
+        : {}),
     },
     settings,
     world: packWorld(world),

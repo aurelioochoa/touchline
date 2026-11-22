@@ -14,6 +14,7 @@ import { formationById } from '../match/tactics.js';
 import type { Formation, MatchPlayer, Side, TeamSetup } from '../match/types.js';
 import { surname } from '../world/names.js';
 import { formOf, isAvailable, kitColour, squadOf, type Club, type World, type WorldPlayer } from '../world/types.js';
+import { trustOf } from '../player/hero.js';
 
 /** How well a player would do in a given slot, all things considered. */
 export function slotScore(p: WorldPlayer, position: Position): number {
@@ -47,7 +48,10 @@ export function pickEleven(world: World, club: Club, formation?: Formation): Sel
   const pool = available.length >= 11 ? available : squadOf(world, club.id);
 
   const slots = shape.slots;
-  const scores: number[][] = slots.map((s) => pool.map((p) => slotScore(p, s.position)));
+  // The coach's opinion of the player-career hero bends his score; nobody else's moves.
+  const hero = world.hero;
+  const trust = hero ? trustOf(hero) : 1;
+  const scores: number[][] = slots.map((s) => pool.map((p) => slotScore(p, s.position) * (p.id === hero?.playerId ? trust : 1)));
   const takenSlot = new Set<number>();
   const takenPlayer = new Set<number>();
   const eleven: (WorldPlayer | null)[] = slots.map(() => null);
@@ -92,6 +96,9 @@ export function pickEleven(world: World, club: Club, formation?: Formation): Sel
     if (bench.length >= 7) break;
     if (!bench.includes(p)) bench.push(p);
   }
+  // A fit hero is always in the squad: the bench means coming on (player-career §8).
+  const benchedHero = rest.find((p) => p.id === hero?.playerId && isAvailable(p));
+  if (benchedHero && !bench.includes(benchedHero)) bench.splice(Math.max(1, bench.length - 1), 1, benchedHero);
 
   return { eleven: chosen, bench };
 }
@@ -155,6 +162,9 @@ export function buildTeamSetup(
       : {}),
     players,
     bench,
+    ...(world.hero && club.playerIds.includes(world.hero.playerId)
+      ? { favourite: { playerId: world.hero.playerId, bond: world.hero.team } }
+      : {}),
     formation: shape,
     instructions: { ...club.instructions },
     reputation: clamp01(club.reputation / 200),

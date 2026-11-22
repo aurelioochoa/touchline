@@ -17,8 +17,9 @@ import { FORMATIONS } from '../sim/match/tactics.js';
 import type { Club, ClubLook, CrestSpec, EmblemLayer, Facilities, Fixture, World, WorldPlayer } from '../sim/world/types.js';
 import { defaultLook, emptySeason, noFacilities } from '../sim/world/types.js';
 import type { CameraMode } from '../render/camera.js';
+import type { Hero, Legend } from '../sim/player/hero.js';
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 export interface Settings {
   lang: string | null;
@@ -69,6 +70,8 @@ export function defaultSettings(): Settings {
 export interface SaveData {
   version: number;
   savedAt: number;
+  /** Which career this slot holds. Every save before version 5 is a Club career. */
+  mode: 'club' | 'player';
   /** Shown on the load screen without unpacking the whole world. */
   summary: {
     clubName: string;
@@ -86,6 +89,11 @@ export interface SaveData {
     kitPrimary?: number;
     kitSecondary?: number;
     crest?: number[];
+    /** A player career's slot draws his shirt instead of a crest. All absent for a club. */
+    mode?: 'club' | 'player';
+    heroName?: string;
+    shirtNumber?: number;
+    age?: number;
   };
   settings: Settings;
   world: PackedWorld;
@@ -113,6 +121,9 @@ export interface PackedWorld {
    */
   look?: number[];
   facilities?: number[];
+  /** The player career's hero and a retired one's framed record. Plain JSON, ~1-2 KB. */
+  hero?: Hero;
+  legend?: Legend;
   /** Base64 of every player's attributes, concatenated. */
   attrs: string;
   /** Base64 of every player's positional familiarity, concatenated. */
@@ -346,6 +357,8 @@ export function packWorld(world: World): PackedWorld {
     ...(world.crest ? { crest: packCrest(world.crest) } : {}),
     look: packLook(world.look),
     facilities: [world.facilities.stands, world.facilities.training, world.facilities.shop],
+    ...(world.hero ? { hero: world.hero } : {}),
+    ...(world.legend ? { legend: world.legend } : {}),
     attrs: toBase64(attrs),
     familiarity: toBase64(fam),
     players: p,
@@ -456,6 +469,9 @@ export function unpackWorld(packed: PackedWorld): World {
     look: unpackLook(packed.look),
     facilities: unpackFacilities(packed.facilities),
     formations: new Map(FORMATIONS.map((f) => [f.id, f])),
+    // Copied, so the live world never shares arrays with whatever was parsed.
+    ...(packed.hero ? { hero: structuredClone(packed.hero) } : {}),
+    ...(packed.legend ? { legend: { ...packed.legend } } : {}),
   };
 }
 

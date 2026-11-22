@@ -14,6 +14,8 @@ import { attrUnit } from '../ratings/attributes.js';
 import {
   activePlayers,
   decideOnBall,
+  shotValue,
+  type BallAction,
   invalidateActive,
   effortOf,
   findPlayer,
@@ -26,6 +28,9 @@ import {
   attackingGoalX,
   betweenPosts,
   defendingGoalX,
+  GOAL_HEIGHT,
+  GOAL_WIDTH,
+  HALF_LENGTH,
   HALF_WIDTH,
   PENALTY_AREA_DEPTH,
   PITCH_LENGTH,
@@ -66,6 +71,32 @@ import {
   type Side,
   type TeamSetup,
 } from './types.js';
+
+/**
+ * The one footballer a player-career kid plays (design player-career §5c′). His on-ball
+ * touches can freeze the match until `resolveMoment` hands back his choice.
+ */
+export interface MomentControl {
+  playerId: number;
+  /** How many touches may still become moments; a dangerous one may overdraw it by two. */
+  budget: number;
+  /** Match second at which he comes off the bench, if he did not start. */
+  enterAt: number;
+  /** The coach trusts him with penalties over the side's best taker. */
+  takesPenalties: boolean;
+}
+
+/** A frozen touch: who has the ball, and what he would have done on his own. */
+export interface PendingMoment {
+  player: MatchPlayer;
+  suggested: BallAction;
+}
+
+/** A shot this good is a moment whatever the budget says. */
+const DANGEROUS_SHOT = 0.11;
+/** Match seconds between two ordinary moments, and between two dangerous ones. */
+const MOMENT_GAP = 240;
+const DANGER_GAP = 45;
 
 /** Seconds in a half, before added time. */
 export const HALF_SECONDS = 45 * 60;
@@ -143,8 +174,12 @@ export class MatchEngine {
    * only so one duel is one trick, not ten.
    */
   readonly #skillUntil = new Map<number, number>();
+  readonly #control: MomentControl | null;
+  #awaiting: PendingMoment | null = null;
+  #lastMomentClock = -Infinity;
 
-  constructor(home: TeamSetup, away: TeamSetup, seed: number, conditions?: Conditions) {
+  constructor(home: TeamSetup, away: TeamSetup, seed: number, conditions?: Conditions, control?: MomentControl) {
+    this.#control = control ? { ...control } : null;
     this.state = createMatchState(home, away, conditions);
     this.seed = seed;
     applyHomeAdvantage(home);
@@ -161,7 +196,7 @@ export class MatchEngine {
   step(): MatchEvent[] {
     this.#events = [];
     const s = this.state;
-    if (s.finished) return this.#events;
+    if (s.finished || this.#awaiting) return this.#events;
 
     s.tick++;
     s.clock += TICK;
@@ -169,6 +204,8 @@ export class MatchEngine {
 
     if (s.restartDelay > 0) {
       s.restartDelay--;
+      // A dead ball is when a manager makes a change, so it is when the hero comes on.
+      this.#bringOnHero();
       // Where everyone walks to while the ball is dead. Without this the branch moved
       // players toward whatever open play last asked for, so a corner was taken with both
       // boxes empty and a free kick had no wall — about a third of a football match spent
@@ -187,10 +224,82 @@ export class MatchEngine {
     positioningPass(s);
     this.#movePlayers(1);
     this.#ballPhase();
+    // A key moment stops the tick half way; resolveMoment runs the rest of it, so a choice
+    // of the default replays the uncontrolled match exactly.
+    if (this.#awaiting) return this.#events;
+    this.#finishTick();
+    return this.#events;
+  }
+
+  #finishTick(): void {
     this.#challengePhase();
     this.#trackPossession();
     this.#clockCheck();
+  }
+
+  /** The frozen touch, or null while the match is running. */
+  get awaiting(): PendingMoment | null {
+    return this.#awaiting;
+  }
+
+  /**
+   * Play the kid's choice and finish the frozen tick. Null on an input the rules refuse —
+   * a receiver who is not ours or not on the pitch, an aim outside the goal frame — so the
+   * caller is told rather than ignored. The suggested action is always accepted.
+   */
+  resolveMoment(action: BallAction): MatchEvent[] | null {
+    const pending = this.#awaiting;
+    if (!pending || (action !== pending.suggested && !this.#validMoment(pending.player, action))) return null;
+    this.#events = [];
+    this.#awaiting = null;
+    this.#execute(pending.player, action);
+    this.#finishTick();
     return this.#events;
+  }
+
+  #validMoment(player: MatchPlayer, action: BallAction): boolean {
+    switch (action.kind) {
+      case 'pass':
+        return action.to.side === player.side && action.to.onPitch && !action.to.sentOff && action.to.id !== player.id;
+      case 'shoot':
+        return Math.abs(action.targetY - HALF_WIDTH) <= GOAL_WIDTH / 2 + 1.5 && action.targetZ >= 0 && action.targetZ <= GOAL_HEIGHT + 1;
+      case 'hold':
+        return true;
+      default:
+        return action.x >= -10 && action.x <= PITCH_LENGTH + 10 && action.y >= -10 && action.y <= PITCH_WIDTH + 10;
+    }
+  }
+
+  /** Whether this touch of the controlled player freezes the match. */
+  #isMoment(player: MatchPlayer): boolean {
+    const control = this.#control;
+    if (!control || player.id !== control.playerId) return false;
+    const s = this.state;
+    const dangerous = shotValue(s, player) > DANGEROUS_SHOT;
+    if (s.clock - this.#lastMomentClock < (dangerous ? DANGER_GAP : MOMENT_GAP)) return false;
+    // A real chance may overdraw the budget by two: the best touches are the point of it.
+    if (control.budget + (dangerous ? 2 : 0) <= 0) return false;
+    const dir = directionOf(player.side, s.period);
+    const attackingHalf = dir > 0 ? player.x > HALF_LENGTH : player.x < HALF_LENGTH;
+    if (!dangerous && !attackingHalf && player.role !== 'MC') return false;
+    control.budget--;
+    this.#lastMomentClock = s.clock;
+    return true;
+  }
+
+  /** The AI manager's one change: the benched hero, for whoever plays his part worst. */
+  #bringOnHero(): void {
+    const control = this.#control;
+    if (!control || this.state.clock < control.enterAt) return;
+    control.enterAt = Infinity;
+    for (const team of [this.state.home, this.state.away]) {
+      const hero = team.bench.find((p) => p.id === control.playerId);
+      if (!hero) continue;
+      const outfield = team.players.filter((p) => p.onPitch && !p.sentOff && p.role !== 'GK');
+      const sameRole = outfield.filter((p) => p.role === hero.role);
+      const off = (sameRole.length ? sameRole : outfield).sort((a, b) => a.stamina - b.stamina)[0];
+      if (off) this.substitute(team.side, off.id, hero.id);
+    }
   }
 
   /**
@@ -347,11 +456,21 @@ export class MatchEngine {
   }
 
   #resolveOnBall(p: MatchPlayer): void {
+    // The default is decided even when the kid will choose, so the play stream is drawn
+    // the same either way and "let him play" is the match that would have happened.
+    const action = decideOnBall(this.state, p, this.#play);
+    p.decisionTicks = reactionTicks(p, this.#play);
+    if (this.#isMoment(p)) {
+      this.#awaiting = { player: p, suggested: action };
+      this.#emit({ type: 'keyMoment', playerId: p.id });
+      return;
+    }
+    this.#execute(p, action);
+  }
+
+  #execute(p: MatchPlayer, action: BallAction): void {
     const s = this.state;
     const dir = directionOf(p.side, s.period);
-    const action = decideOnBall(s, p, this.#play);
-    p.decisionTicks = reactionTicks(p, this.#play);
-
     if (action.kind === 'hold') return;
 
     if (action.kind === 'dribble') {
@@ -808,7 +927,9 @@ export class MatchEngine {
     if (card === 'red') invalidateActive();
     this.#emit({ type: 'foul', by: offender.id, on: victim.id, side: offender.side, card });
 
-    if (this.#ref() < injuryChance(victim, severity)) {
+    // The draw always happens, so the referee stream is the same; the kid's own footballer
+    // is simply never the one hurt (player-career §8).
+    if (this.#ref() < injuryChance(victim, severity) && victim.id !== this.#control?.playerId) {
       victim.injured = true;
       victim.action = 'down';
       victim.actionTicks = 30;
@@ -955,10 +1076,10 @@ export class MatchEngine {
     const dir = directionOf(side, s.period);
 
     if (play.kind === 'penalty') {
-      // The best finisher on the pitch takes it.
-      const taker = activePlayers(team)
-        .filter((p) => p.role !== 'GK')
-        .sort((a, b) => attrUnit(b.attrs, 'penaltyTaking') - attrUnit(a.attrs, 'penaltyTaking'))[0];
+      // The best finisher on the pitch takes it, unless the coach has handed it to the hero.
+      const takers = activePlayers(team).filter((p) => p.role !== 'GK');
+      const trusted = this.#control?.takesPenalties ? takers.find((p) => p.id === this.#control?.playerId) : undefined;
+      const taker = trusted ?? takers.sort((a, b) => attrUnit(b.attrs, 'penaltyTaking') - attrUnit(a.attrs, 'penaltyTaking'))[0];
       if (taker) {
         taker.x = s.ball.x - dir * 2;
         taker.y = HALF_WIDTH;

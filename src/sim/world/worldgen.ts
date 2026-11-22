@@ -259,6 +259,12 @@ export function assignSquadNumbers(world: World, club: Club): void {
   outfield.sort((a, b) => caOf(b.attrs, b.natural) - caOf(a.attrs, a.natural));
 
   const taken = new Set<number>();
+  // The player-career hero wears the number the kid chose, wherever he goes.
+  const hero = world.hero && club.playerIds.includes(world.hero.playerId) ? world.players[world.hero.playerId] : undefined;
+  if (hero && world.hero) {
+    hero.squadNumber = world.hero.number;
+    taken.add(world.hero.number);
+  }
   keepers.forEach((k, i) => {
     const n = i === 0 ? 1 : 12 + i;
     k.squadNumber = n;
@@ -266,6 +272,7 @@ export function assignSquadNumbers(world: World, club: Club): void {
   });
   let next = 2;
   for (const p of outfield) {
+    if (p === hero) continue;
     while (taken.has(next) && next < 40) next++;
     p.squadNumber = next;
     taken.add(next);

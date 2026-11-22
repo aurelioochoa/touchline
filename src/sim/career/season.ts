@@ -15,7 +15,7 @@ import { conditionsFor } from '../match/conditions.js';
 import { chance, int, range, shuffle, streamOf, type Rng } from '../../core/rng.js';
 import { caOf } from '../ratings/ability.js';
 import { attrUnit } from '../ratings/attributes.js';
-import { MatchEngine } from '../match/engine.js';
+import { MatchEngine, type MomentControl } from '../match/engine.js';
 import { quickMatch } from '../match/quick.js';
 import type { MatchResult } from '../match/types.js';
 import { buildNameBook } from '../world/names.js';
@@ -41,6 +41,7 @@ import {
 import { buildTeamSetup, ensureKitContrast, pickEleven } from './squad.js';
 import { coachingBonus, recoveryDays, shopIncome } from './facilities.js';
 import { placeFreeAgents, pruneRetired, runTransferWindow } from './transfers.js';
+import { heroCoaching, moveHero, settleHeroGrowth } from '../player/hero.js';
 
 /** Yellow cards that trigger a one-match ban. */
 const YELLOW_BAN_THRESHOLD = 5;
@@ -53,7 +54,7 @@ const YOUTH_ROLES = ['GK', 'DC', 'DL', 'DR', 'DM', 'MC', 'ML', 'MR', 'AMC', 'AML
 export interface DayReport {
   day: number;
   played: Fixture[];
-  /** The managed club's fixture today, if there was one. */
+  /** The watched club's fixture today, if there was one. */
   ownFixture: Fixture | null;
   seasonEnded: boolean;
 }
@@ -96,18 +97,19 @@ export function expectationFor(world: World, club: Club): number {
 }
 
 /**
- * Advance one day. `watchOwn` leaves the managed club's fixture unplayed and returns it, so
- * the caller can run the full engine and hand the result back through `applyResult`.
+ * Advance one day. `watchClubId` leaves that club's fixture unplayed and returns it, so the
+ * caller can run the full engine and hand the result back through `applyResult`. A club,
+ * not "the managed one", because a player career watches the hero's club and manages none.
  */
-export function advanceDay(world: World, opts: { watchOwn?: boolean } = {}): DayReport {
+export function advanceDay(world: World, opts: { watchClubId?: number } = {}): DayReport {
   const day = world.day;
   const rng = streamOf(world.seed + world.season * 104729 + day, 'day');
   const report: DayReport = { day, played: [], ownFixture: null, seasonEnded: false };
 
   const todays = world.fixtures.filter((f) => f.day === day && !f.played);
   for (const fixture of todays) {
-    const isOwn = fixture.homeId === world.managedClubId || fixture.awayId === world.managedClubId;
-    if (isOwn && opts.watchOwn) {
+    const watched = opts.watchClubId ?? -1;
+    if (watched >= 0 && (fixture.homeId === watched || fixture.awayId === watched)) {
       report.ownFixture = fixture;
       continue;
     }
@@ -160,7 +162,7 @@ export function playQuick(world: World, fixture: Fixture, rng: Rng): MatchResult
 }
 
 /** Build a full-engine match for a fixture — the one the player watches. */
-export function openMatch(world: World, fixture: Fixture): MatchEngine {
+export function openMatch(world: World, fixture: Fixture, control?: MomentControl): MatchEngine {
   const home = world.clubs[fixture.homeId];
   const away = world.clubs[fixture.awayId];
   if (!home || !away) throw new Error('fixture references a club that does not exist');
@@ -171,6 +173,7 @@ export function openMatch(world: World, fixture: Fixture): MatchEngine {
   return new MatchEngine(
     setupHome, setupAway, seed,
     conditionsFor(world.seed, world.season, fixture.round),
+    control,
   );
 }
 
@@ -213,7 +216,8 @@ export function applyResult(world: World, fixture: Fixture, result: MatchResult)
 
       // An injury is possible in any match, not only from a foul.
       const prone = attrUnit(p.attrs, 'injuryProneness');
-      if (chance(rng, 0.011 * (0.5 + prone) * (1.4 - p.condition))) {
+      // Drawn for the hero too, so the stream is the same; he is simply never hurt.
+      if (chance(rng, 0.011 * (0.5 + prone) * (1.4 - p.condition)) && p.id !== world.hero?.playerId) {
         p.injuryDays = int(rng, 4, 70);
       }
     }
@@ -258,6 +262,8 @@ export function applyResult(world: World, fixture: Fixture, result: MatchResult)
  */
 export function endSeason(world: World): { champions: number[]; promoted: number[]; relegated: number[] } {
   const rng = streamOf(world.seed + world.season * 31337, 'roll');
+  // A loan is a season long: he goes home before the summer churn.
+  if (world.hero && world.hero.loanFromClubId >= 0) moveHero(world, world.hero.loanFromClubId, false);
   const champions: number[] = [];
   const promoted: number[] = [];
   const relegated: number[] = [];
@@ -345,10 +351,19 @@ function rollSquads(world: World, rng: Rng): void {
     for (const p of squadOf(world, club.id)) {
       const minutesShare = clamp01(p.season.minutes / (38 * 90));
       p.age++;
-      developPlayer(p, rng, coaching, minutesShare);
+      const hero = p.id === world.hero?.playerId ? world.hero : null;
+      const grown = developPlayer(p, rng, hero ? heroCoaching(hero) : coaching, minutesShare);
+      if (hero) settleHeroGrowth(hero, p, grown);
       p.contractYears--;
+      const retiring = retires(p, rng, strength);
+      // He retires when the kid says so or at forty, and his club always renews him; the
+      // offers are where he finds a club that would play him.
+      if (hero) {
+        if (p.contractYears <= 0) p.contractYears = 2;
+        continue;
+      }
 
-      if (retires(p, rng, strength)) {
+      if (retiring) {
         leaving.push(p.id);
         p.retired = true;
         continue;
@@ -411,7 +426,7 @@ function topUpSquads(world: World, rng: Rng): void {
     }
     // And nobody carries a squad so big the wage bill is meaningless.
     while (club.playerIds.length > MAX_SQUAD) {
-      const squad = squadOf(world, club.id).sort(
+      const squad = squadOf(world, club.id).filter((p) => p.id !== world.hero?.playerId).sort(
         (a, b) => caOf(a.attrs, a.natural) - caOf(b.attrs, b.natural),
       );
       const out = squad[0];

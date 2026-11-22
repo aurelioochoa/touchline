@@ -133,6 +133,8 @@ function findTarget(
     if (reach > 2 && buyer.reputation - seller.reputation < 45) continue;
 
     for (const p of squadOf(world, seller.id)) {
+      // The hero's moves are the kid's to make, from offers (player-career §12).
+      if (p.id === world.hero?.playerId) continue;
       const gain = upgradeValue(world, buyer, p);
       if (gain < 4) continue;
       const value = playerValue(p);
@@ -198,6 +200,8 @@ export function pruneRetired(world: World): number {
   const renumbered: WorldPlayer[] = keep.map((p, i) => ({ ...p, id: i }));
   const removed = world.players.length - renumbered.length;
   world.players = renumbered;
+  // The hero's id is the one other id held across a save.
+  if (world.hero) world.hero.playerId = remap.get(world.hero.playerId) ?? -1;
   for (const club of world.clubs) {
     club.playerIds = club.playerIds
       .map((id) => remap.get(id))

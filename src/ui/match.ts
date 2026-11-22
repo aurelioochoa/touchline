@@ -30,8 +30,13 @@ import { Minimap } from './minimap.js';
 import { Commentator, type Line } from './commentary.js';
 import { Voice } from './voice.js';
 import { emptyScene } from './art/empty.js';
+import { MomentPad } from './career/momentPad.js';
+import { momentOptions, type MomentOption } from '../sim/player/moments.js';
 
 const MAX_STEPS = 40;
+
+/** The four goal celebrations, by pose: a star jump, the badge, a slide, the crowd. */
+const CELEBRATION_GLYPHS: IconName[] = ['star', 'shirt', 'forward', 'squad'];
 
 /** Each camera's icon and name. The icon has to carry it alone when strings are blanked. */
 const CAMERA_LOOK: Record<CameraMode, { icon: IconName; name: StringKey }> = {
@@ -93,6 +98,20 @@ export interface MatchScreenOptions {
   camera?: string;
   /** Told whenever the camera is changed, so the next match starts on the same one. */
   onCameraChange?(camera: CameraMode): void;
+  career?: CareerMatchOptions;
+}
+
+/**
+ * A player-career match (player-career §7a): no touchline levers, the match runs at 40x
+ * between the hero's key moments, slows as the ball comes to him and freezes for a choice.
+ */
+export interface CareerMatchOptions {
+  heroId: number;
+  /** Which of the four celebrations are unlocked. None is offered with reduced motion. */
+  celebrations: boolean[];
+  /** Every batch of events the engine produced, watched or skipped, for the post-match card. */
+  onEvents(events: readonly MatchEvent[]): void;
+  onChoice(option: MomentOption): void;
 }
 
 /** One live chip in the bottom strip, kept so it can be updated rather than rebuilt. */
@@ -170,6 +189,12 @@ export class MatchScreen {
   #logBtn!: HTMLButtonElement;
   /** Events seen this frame, batched so the commentator picks ONE thing to say. */
   #tickEvents: MatchEvent[] = [];
+  readonly #career: CareerMatchOptions | null;
+  #pad: MomentPad | null = null;
+  #celebrating = false;
+  /** Real time until which a career match runs at 1x, so the kid sees what the choice did. */
+  #slowUntil = 0;
+  #careerCamera = '';
 
   constructor(opts: MatchScreenOptions) {
     this.#engine = opts.engine;
@@ -187,6 +212,7 @@ export class MatchScreen {
     this.#commentary = opts.commentary ?? 'text';
     this.#commentator = new Commentator(opts.engine.seed, this.#mine);
     this.#voice.setEnabled(this.#commentary === 'voice');
+    this.#career = opts.career ?? null;
 
     const canvas = el('canvas');
     this.root.append(canvas);
@@ -211,7 +237,8 @@ export class MatchScreen {
     this.#client.setCameraMode(this.#camera);
 
     this.#buildHud();
-    this.#buildStrip();
+    if (this.#career) this.#buildCareerHud();
+    else this.#buildStrip();
     this.#minimap = new Minimap({ mine: this.#mine });
     this.root.append(this.#minimap.root);
     this.#ticker = el('div', { class: 'tl-ticker', role: 'log', 'aria-live': 'polite' });
@@ -248,6 +275,7 @@ export class MatchScreen {
     removeEventListener('pointerdown', this.#onOutside, true);
     clearTimeout(this.#camToastTimer);
     this.#voice.stop();
+    this.#pad?.dispose();
     this.#client.dispose();
     this.#minimap.dispose();
     this.#drawerMap?.dispose();
@@ -369,10 +397,124 @@ export class MatchScreen {
 
   /** Step the engine once and route what happened to both the HUD and the commentator. */
   #advance(): void {
-    for (const e of this.#engine.step()) {
+    this.#route(this.#engine.step());
+  }
+
+  #route(events: readonly MatchEvent[]): void {
+    this.#career?.onEvents(events);
+    for (const e of events) {
       this.#onEvent(e);
       this.#tickEvents.push(e);
     }
+  }
+
+  // ---- the player career ------------------------------------------------------
+
+  /** Pause, camera, the log, the way out — and Next moment in place of speed and tactics. */
+  #buildCareerHud(): void {
+    this.root.classList.add('tl-career-match');
+    const next = button(t('career.nextMoment'), () => this.skipToMoment(), {
+      class: 'tl-btn tl-sm tl-next-moment', icon: 'skip', 'aria-label': t('career.nextMoment'), tip: `${t('career.nextMoment')} · N`,
+    });
+    this.#playBtn.after(next);
+  }
+
+  /** Match seconds per real second, decided by where the ball is rather than a button. */
+  #careerSpeed(now: number): number {
+    const career = this.#career as CareerMatchOptions;
+    if (this.#engine.awaiting || this.#celebrating) return 0;
+    const ball = this.#engine.state.ball;
+    const coming = ball.ownerId === career.heroId || ball.intendedReceiverId === career.heroId;
+    const speed = now < this.#slowUntil ? 1 : coming ? 4 : 40;
+    // The freeze lands on a picture the kid was already watching: ease to the player camera
+    // as the ball comes to him. Reduced motion keeps whatever camera was chosen.
+    const camera = speed < 40 && !this.#reducedMotion ? 'player' : this.#camera;
+    if (camera !== this.#careerCamera) {
+      this.#careerCamera = camera;
+      this.#client.setFollow(camera === 'player' ? career.heroId : -1);
+      this.#client.setCameraMode(camera as CameraMode);
+    }
+    this.#client.setPace(speed);
+    return speed;
+  }
+
+  #openPad(): void {
+    const pending = this.#engine.awaiting;
+    if (!pending || this.#pad) return;
+    audio.whistle('short');
+    this.#pad = new MomentPad({
+      host: this.root,
+      project: (x, y, z) => this.#client.project(x, y, z),
+      state: this.#engine.state,
+      hero: pending.player,
+      options: momentOptions(this.#engine.state, pending.player, pending.suggested),
+      suggested: pending.suggested,
+      onChoose: (option, action) => {
+        this.#pad = null;
+        this.#career?.onChoice(option);
+        this.#route(this.#engine.resolveMoment(action) ?? this.#engine.resolveMoment(pending.suggested) ?? []);
+        this.#slowUntil = performance.now() + 3000;
+      },
+    });
+  }
+
+  /** The open key moment's buttons, for the harnesses. */
+  get momentPad(): MomentPad | null {
+    return this.#pad;
+  }
+
+  /**
+   * Next moment: run the match headless to the hero's next touch (a whole match is about a
+   * second and a half of engine). The skipped stretch still reaches the career's tally.
+   */
+  skipToMoment(): void {
+    if (this.#pad || this.#celebrating || !this.#career) return;
+    const state = this.#engine.state;
+    for (let guard = 0; guard < 80_000 && !state.finished && !this.#engine.awaiting; guard++) {
+      this.#career.onEvents(this.#engine.step());
+    }
+    this.#client.captureTick(state);
+    this.#client.captureTick(state);
+    this.#client.resetCamera(state);
+    audio.tick();
+    this.#finishCheck(state);
+  }
+
+  /** Play the rest with every moment left to him — the career's Back, chosen on purpose. */
+  finishForMe(): void {
+    const state = this.#engine.state;
+    this.#pad?.dispose();
+    this.#pad = null;
+    for (let guard = 0; guard < 80_000 && !state.finished; guard++) {
+      const pending = this.#engine.awaiting;
+      this.#career?.onEvents(pending ? this.#engine.resolveMoment(pending.suggested) ?? [] : this.#engine.step());
+    }
+    this.#finishCheck(state);
+  }
+
+  /** A goal of his: four poses to choose from, the locked ones shown with a lock (§7a). */
+  #celebrate(): void {
+    const career = this.#career as CareerMatchOptions;
+    this.#celebrating = true;
+    const panel = el('div', { class: 'tl-celebrate', role: 'group', 'aria-label': t('career.celebrate') });
+    const done = (pose: number): void => {
+      panel.remove();
+      const badge = el('div', { class: `tl-celebration pose-${pose}`, 'aria-hidden': 'true' }, [icon(CELEBRATION_GLYPHS[pose] ?? 'star', 64)]);
+      this.root.append(badge);
+      setTimeout(() => {
+        badge.remove();
+        this.#celebrating = false;
+      }, 1400);
+    };
+    career.celebrations.forEach((open, pose) => {
+      const choice = button('', () => done(pose), {
+        class: 'tl-btn tl-celebrate-opt', icon: open ? CELEBRATION_GLYPHS[pose] ?? 'star' : 'lock',
+        'aria-label': t(`career.celebration${pose}` as StringKey), disabled: !open,
+      });
+      panel.append(choice);
+    });
+    this.root.append(panel);
+    panel.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
   }
 
   /**
@@ -438,10 +580,13 @@ export class MatchScreen {
         this.#cycleCamera(e.shiftKey ? -1 : 1);
         break;
       case 'f': case 'F':
-        this.#cycleSpeed();
+        if (!this.#career) this.#cycleSpeed();
         break;
       case 't': case 'T':
-        this.#toggleDrawer();
+        if (!this.#career) this.#toggleDrawer();
+        break;
+      case 'n': case 'N':
+        this.skipToMoment();
         break;
       case 'Escape':
         if (this.#camMenu) this.#closeCamMenu(true);
@@ -902,7 +1047,7 @@ export class MatchScreen {
 
     const state = this.#engine.state;
     if (!this.#paused && !state.finished) {
-      this.#acc += dt * this.#speed;
+      this.#acc += dt * (this.#career ? this.#careerSpeed(now) : this.#speed);
       let steps = 0;
       while (this.#acc >= TICK && steps < MAX_STEPS) {
         this.#acc -= TICK;
@@ -910,8 +1055,10 @@ export class MatchScreen {
         this.#advance();
         this.#client.captureTick(state);
         if (state.play.kind === 'halfTime' && !this.#halfTimeShown) break;
+        if (this.#engine.awaiting) break;
       }
-      if (steps === MAX_STEPS) this.#acc = 0;
+      if (steps === MAX_STEPS || this.#engine.awaiting) this.#acc = 0;
+      if (this.#career) this.#openPad();
     }
 
     this.#speak(state, dt);
@@ -970,7 +1117,9 @@ export class MatchScreen {
   #checkBreaks(state: MatchState): void {
     if (state.play.kind === 'halfTime' && !this.#halfTimeShown && !state.finished) {
       this.#halfTimeShown = true;
-      if (this.#attached) this.#showHalfTime(state);
+      // Half time is a manager's screen; a player career just plays on.
+      if (this.#career) this.#onHalfTime?.(state);
+      else if (this.#attached) this.#showHalfTime(state);
       else this.#onHalfTime?.(state);
     }
     this.#finishCheck(state);
@@ -1020,6 +1169,7 @@ export class MatchScreen {
         // or is not watching, in which case the camera would cut back before anyone saw it.
         // The render client decides whether the chosen camera allows it: TV and main do.
         if (!this.#reducedMotion && this.#attached) this.#client.cutaway('ground', 4.2);
+        if (this.#career && e.by === this.#career.heroId && !e.ownGoal && !this.#reducedMotion) this.#celebrate();
         break;
       }
       case 'shot': {

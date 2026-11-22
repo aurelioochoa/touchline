@@ -648,6 +648,10 @@ export function decideOnBall(state: MatchState, p: MatchPlayer, rng: Rng): BallA
     // Going backwards is a decision, not a failure. Only a direct side really dislikes it.
     if (gain < 0) score -= inst.directness * 0.3;
 
+    // Never more than fifteen percent, and only on a pass worth playing anyway: a bond
+    // makes him the first look, not the only one.
+    if (team.favourite?.playerId === m.id && score > 0) score *= 1 + 0.15 * team.favourite.bond;
+
     if (!bestPass || score > bestPass.score) {
       bestPass = { to: m, speed, loft, long, score: clamp01(score) };
     }

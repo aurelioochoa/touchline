@@ -229,6 +229,10 @@ export class RenderClient {
   #cutawayLeft = 0;
   /** Who the player camera is riding behind. Sticky, so a loose ball does not flick it about. */
   #focusId = -1;
+  /** A player career's hero: the player camera rides behind him whoever has the ball. */
+  #followId = -1;
+  /** A training ground at dusk: no stands, no crowd, no officials (player-career §9). */
+  #training = false;
   #pmrem: THREE.PMREMGenerator;
   #envTarget: THREE.WebGLRenderTarget | null = null;
 
@@ -441,7 +445,8 @@ export class RenderClient {
    */
   #findFocus(state: MatchState, bx: number, by: number): void {
     const ball = state.ball;
-    const want = ball.ownerId >= 0 ? ball.ownerId : ball.intendedReceiverId >= 0 ? ball.intendedReceiverId : this.#focusId;
+    const want = this.#followId >= 0 ? this.#followId
+      : ball.ownerId >= 0 ? ball.ownerId : ball.intendedReceiverId >= 0 ? ball.intendedReceiverId : this.#focusId;
     let pick: Visual | null = null;
     let best = Infinity;
     for (let i = 0; i < MAX_PLAYERS; i++) {
@@ -584,7 +589,7 @@ export class RenderClient {
       const v = this.#visuals[MAX_PLAYERS + k] as Visual;
       const wasLive = v.live;
       v.id = -100 - k;
-      v.live = true;
+      v.live = !this.#training;
       v.prevX = wasLive ? v.currX : o.x;
       v.prevZ = wasLive ? v.currZ : o.y;
       v.prevFacing = wasLive ? v.currFacing : o.facing;
@@ -928,6 +933,26 @@ export class RenderClient {
   debugFigure(playerId: number): [number, number] | null {
     const v = this.#visuals.find((x) => x.live && x.id === playerId);
     return v ? [toSceneX(v.currX), toSceneZ(v.currZ)] : null;
+  }
+
+  setFollow(playerId: number): void {
+    this.#followId = playerId;
+  }
+
+  setTrainingGround(on: boolean): void {
+    this.#training = on;
+    this.#stadium.group.visible = !on;
+  }
+
+  /**
+   * Where a pitch point is on screen, in CSS pixels from the canvas's top left — what the
+   * key-moment buttons are anchored to. Null when it is behind the camera.
+   */
+  project(simX: number, simY: number, height: number): { x: number; y: number } | null {
+    const point = new THREE.Vector3(toSceneX(simX), height, toSceneZ(simY)).project(this.cam.camera);
+    if (point.z > 1) return null;
+    const canvas = this.renderer.domElement;
+    return { x: (point.x + 1) / 2 * canvas.clientWidth, y: (1 - point.y) / 2 * canvas.clientHeight };
   }
 
   /** Snap the camera, e.g. after a cut or on the first frame. */

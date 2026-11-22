@@ -9,6 +9,7 @@ import type { Attributes } from '../ratings/attributes.js';
 import type { Position } from '../ratings/positions.js';
 import type { Formation, TeamInstructions } from '../match/types.js';
 import type { Culture, NameBook } from './names.js';
+import type { Hero, Legend } from '../player/hero.js';
 
 /** Days in a season, from the first day of pre-season to the last day of the summer. */
 export const SEASON_DAYS = 365;
@@ -175,6 +176,10 @@ export interface World {
   facilities: Facilities;
   /** Formations are shared objects; the club stores an id. */
   formations: Map<string, Formation>;
+  /** The player career's footballer. Absent in a Club career, where managedClubId rules. */
+  hero?: Hero;
+  /** A retired hero, framed in the honours of the club he now manages (Legacy). */
+  legend?: Legend;
 }
 
 /**

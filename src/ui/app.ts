@@ -421,7 +421,7 @@ export class Game implements ScreenHost {
     for (let guard = 0; guard < 400; guard++) {
       const fixture = nextFixture(this.world, club.id);
       if (fixture && fixture.day === this.world.day) return this.#showMatchPrompt();
-      const report = advanceDay(this.world, { watchOwn: true });
+      const report = advanceDay(this.world, { watchClubId: club.id });
       if (report.ownFixture) {
         this.save();
         this.refresh();

@@ -233,6 +233,11 @@ export interface TeamSetup {
   /** Reputation 0..1, used for crowd support and referee leniency. */
   reputation: number;
   subsUsed: number;
+  /**
+   * The player-career hero, whom team-mates look for a little more as their bond grows.
+   * Absent in every Club-career match, so the manager mode plays exactly as before.
+   */
+  favourite?: { playerId: number; bond: number };
 }
 
 /** What the match is doing right now. */
@@ -320,7 +325,9 @@ export type MatchEvent =
   | { type: 'injury'; playerId: number; side: Side }
   | { type: 'halfTime' }
   | { type: 'fullTime' }
-  | { type: 'chance'; side: Side; quality: number };
+  | { type: 'chance'; side: Side; quality: number }
+  /** The kid's footballer has the ball and the match is frozen for his choice. */
+  | { type: 'keyMoment'; playerId: number };
 
 /** The compact result the career layer stores. A match is not kept tick by tick (§C). */
 export interface MatchResult {

@@ -49,7 +49,18 @@ export type IconName =
   | 'layers'
   | 'tv'
   | 'goal'
-  | 'flag';
+  | 'flag'
+  | 'lock'
+  | 'boot'
+  | 'clipboard'
+  | 'huddle'
+  | 'scarf'
+  | 'target'
+  | 'cone'
+  | 'moon'
+  | 'dice'
+  | 'trophy'
+  | 'rondo';
 
 /** Path data only — the wrapper below supplies the shared stroke attributes. */
 export const ICON_PATHS: Record<IconName, string> = {
@@ -125,6 +136,18 @@ export const ICON_PATHS: Record<IconName, string> = {
   tv: 'M3.4 6.4h17.2v10.8H3.4ZM8.6 20.4h6.8M12 17.2v3.2M9 3 12 6.2 15 3',
   goal: 'M3 18.8V6.8h18v12M3 6.8l3.4 3.6h11.2L21 6.8M6.4 10.4v8.4M17.6 10.4v8.4M3 18.8h18',
   flag: 'M6.4 20.6V3.6M6.4 4.4h10.8l-2.6 3.8 2.6 3.8H6.4',
+  // The player career: the rings' clipboard, huddle and scarf, the week and the shelf.
+  lock: 'M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9h-13ZM12 14.5v2.5',
+  boot: 'M5 4.5h5.5v7.2l7.4 2.6c1.6.6 2.6 1.9 2.6 3.4V19H4.6ZM4.6 16h15.9M8 19v1.8M14 19v1.8',
+  clipboard: 'M8 4.5h8v2.6H8ZM6 5.8H4.8v15h14.4v-15H18M8 12l2.4 2.4L16 9.6M8 17.6h8',
+  huddle: 'M12 9.4a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM5.6 11.4a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4ZM18.4 11.4a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4ZM7.6 19.6c0-3 2-5.2 4.4-5.2s4.4 2.2 4.4 5.2M2.4 18c.2-2.4 1.5-3.8 3.2-3.8M21.6 18c-.2-2.4-1.5-3.8-3.2-3.8',
+  scarf: 'M3.5 7.5c5.5 2.2 11.5 2.2 17 0v4c-5.5 2.2-11.5 2.2-17 0ZM7 11.4v8.4l2-1.4 2 1.4V12M7 15h4',
+  target: 'M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17ZM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM12 11.2v1.6',
+  cone: 'M12 3.4 7.2 18h9.6ZM9.8 10.4h4.4M8.4 14.4h7.2M4.4 20.6h15.2',
+  moon: 'M19.6 14.6A8 8 0 0 1 9.4 4.4a8 8 0 1 0 10.2 10.2Z',
+  dice: 'M4.4 4.4h15.2v15.2H4.4ZM8.6 8.6h.01M15.4 8.6h.01M12 12h.01M8.6 15.4h.01M15.4 15.4h.01',
+  trophy: 'M7.4 4h9.2v4.6a4.6 4.6 0 0 1-9.2 0ZM7.4 6H4.4c0 2.6 1.4 4 3.4 4.2M16.6 6h3c0 2.6-1.4 4-3.4 4.2M12 13.2v3.6M9.6 16.8h4.8V20H9.6Z',
+  rondo: 'M12 4.4a7.6 7.6 0 1 0 0 15.2 7.6 7.6 0 0 0 0-15.2ZM12 3v2.8M12 18.2V21M3 12h2.8M18.2 12H21M10.2 12h3.6',
 };
 
 /** Every name, for the set-wide checks in icons.test.ts. */

@@ -70,6 +70,9 @@ export const MIGRATIONS: Migration[] = [
       world: { ...rest, crest: [0, PATTERN[i], 1, EMBLEM[i], 0, 1] },
     };
   },
+  // 4 -> 5: the player career. Every save that exists is a Club career, and that is all
+  // this step says; nothing else in it changes.
+  (data) => ({ ...data, mode: data.mode ?? 'club' }),
 ];
 
 export type MigrateResult =
