@@ -510,6 +510,12 @@ export class MatchScreen {
     });
     this.root.append(panel);
     panel.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
+    // Never a wait: unanswered, the picker steps aside and the match plays on.
+    setTimeout(() => {
+      if (!panel.isConnected) return;
+      panel.remove();
+      this.#celebrating = false;
+    }, 6000);
   }
 
   /**

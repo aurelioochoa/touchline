@@ -124,10 +124,8 @@ const hero = (frame) => frame.evaluate(() => {
   const player = world.players[record.playerId];
   return { ...record, apps: player.season.apps, clubId: player.clubId, age: player.age };
 });
-const visible = (frame, selector) => frame.evaluate((query) => {
-  const node = document.querySelector(query);
-  return !!node && node.getClientRects().length > 0;
-}, selector);
+const visible = (frame, selector) => frame.evaluate((query) =>
+  [...document.querySelectorAll(query)].some((node) => node.getClientRects().length > 0), selector);
 
 /** The smallest moment or locker target on screen, in CSS px. */
 const smallestTarget = (frame, selector) => frame.evaluate((query) => {
@@ -139,6 +137,19 @@ const smallestTarget = (frame, selector) => frame.evaluate((query) => {
   }
   return smallest;
 }, selector);
+
+/** After Next moment: the next key moment, or full time if none came. */
+const momentOrFullTime = (page) => until(async () => {
+  if (await visible(page, '.tl-moment-opt')) return 'moment';
+  return (await visible(page, '.tl-post-score')) ? 'finished' : null;
+}, 15000, 'a key moment or full time').catch(async (error) => {
+  const state = await page.evaluate(() => {
+    const live = window.__touchline.game.career.liveMatch;
+    return live && { clock: live.state.clock, finished: live.state.finished, pad: !!live.momentPad, overlays: document.querySelectorAll('.tl-overlay, .tl-celebrate').length };
+  });
+  await page.screenshot({ path: `${shots}failure.png` }).catch(() => {});
+  throw new Error(`${error.message}; match: ${JSON.stringify(state)}`);
+});
 
 /** Walk the moment's options with the arrow key until one of `kind` has focus. */
 async function focusKind(page, frame, kind) {
@@ -250,32 +261,36 @@ try {
     const afterDrill = await hero(page);
     if (afterDrill.week.length !== 2 || afterDrill.stars.length !== 1) fail(`desktop: the drill should fill a slot and score, got ${JSON.stringify(afterDrill.week)}`);
 
-    // Matchday: key moments by keys, Next moment, then Back and "play the rest for me".
-    await page.locator('.tl-career-go .tl-primary').focus();
-    await page.keyboard.press('Enter');
-    await until(() => visible(page, '.tl-career-match canvas'), 8000, 'the career match');
+    // Matchday: key moments by keys, Next moment, then Back and "play the rest for me". A
+    // late substitute can reach full time without a qualifying touch, so a match that ends
+    // first is followed by the next fixture.
     let answered = 0;
-    for (let moment = 0; moment < 2; moment++) {
-      await page.keyboard.press('KeyN');
-      try {
-        await until(() => visible(page, '.tl-moment-opt'), 6000, 'a key moment after Next moment');
-      } catch {
-        break;
+    for (let match = 0; match < 3 && answered === 0; match++) {
+      await page.locator('.tl-career-go .tl-primary').focus();
+      await page.keyboard.press('Enter');
+      await until(() => visible(page, '.tl-career-match canvas'), 8000, 'the career match');
+      let finished = false;
+      for (let moment = 0; moment < 2 && !finished; moment++) {
+        await page.keyboard.press('KeyN');
+        finished = (await momentOrFullTime(page)) === 'finished';
+        if (finished) break;
+        if (answered === 0) await shot(page, 'desktop-match-moment');
+        await answerByKeys(page, page);
+        answered++;
+        await until(async () => !(await visible(page, '.tl-moment-opt')), 3000, 'the match to run on');
       }
-      if (moment === 0) await shot(page, 'desktop-match-moment');
-      await answerByKeys(page, page);
-      answered++;
-      await until(async () => !(await visible(page, '.tl-moment-opt')), 3000, 'the match to run on');
+      if (!finished) {
+        await page.keyboard.press('Escape');
+        await until(() => visible(page, '.tl-overlay .tl-sheet'), 3000, 'the leave sheet');
+        await page.locator('.tl-overlay .tl-sheet-foot .tl-btn').nth(1).focus();
+        await page.keyboard.press('Enter');
+      }
+      await until(() => visible(page, '.tl-post-score'), 15000, 'the post-match card');
+      if (answered > 0) await shot(page, 'desktop-post-match');
+      await page.keyboard.press('Enter');
     }
-    if (answered === 0) fail('desktop: the match never froze for a key moment');
+    if (answered === 0) fail('desktop: three matches and not one key moment');
     console.log(`[desktop] answered ${answered} key moments in the match by keyboard`);
-    await page.keyboard.press('Escape');
-    await until(() => visible(page, '.tl-overlay .tl-sheet'), 3000, 'the leave sheet');
-    await page.locator('.tl-overlay .tl-sheet-foot .tl-btn').nth(1).focus();
-    await page.keyboard.press('Enter');
-    await until(() => visible(page, '.tl-post-score'), 15000, 'the post-match card');
-    await shot(page, 'desktop-post-match');
-    await page.keyboard.press('Enter');
     const afterMatch = await hero(page);
     if (afterMatch.week.length !== 0) fail('desktop: the week should reset after the match');
     const played = await page.evaluate(() => window.__touchline.world.fixtures.filter((fixture) => fixture.played).length);
@@ -338,10 +353,15 @@ try {
     await page.locator('.tl-week-slot:not(.is-used)').first().tap();
     await page.locator('.tl-activity').nth(3).tap();
     await until(async () => (await hero(page)).week.length === 1, 2000, 'an extra session in the week');
-    await page.locator('.tl-career-go .tl-primary').tap();
-    await until(() => visible(page, '.tl-career-match canvas'), 8000, 'the phone match');
-    await page.locator('.tl-next-moment').tap();
-    await until(() => visible(page, '.tl-moment-opt'), 8000, 'a phone key moment');
+    let reached = false;
+    for (let match = 0; match < 3 && !reached; match++) {
+      await page.locator('.tl-career-go .tl-primary').tap();
+      await until(() => visible(page, '.tl-career-match canvas'), 8000, 'the phone match');
+      await page.locator('.tl-next-moment').tap();
+      reached = (await momentOrFullTime(page)) === 'moment';
+      if (!reached) await page.locator('.tl-overlay .tl-sheet-foot .tl-btn').tap();
+    }
+    if (!reached) throw new Error('phone: three matches and not one key moment');
     const matchSmallest = await smallestTarget(page, '.tl-moment-opt');
     if (matchSmallest < 56) fail(`phone: a match moment target is ${matchSmallest}px`);
     await shot(page, 'phone-match-moment');
@@ -406,7 +426,12 @@ try {
     await page.locator('.tl-career-go .tl-primary').click();
     await until(() => visible(page, '.tl-career-match canvas'), 8000, 'the blank match');
     await page.keyboard.press('KeyN');
-    await until(() => visible(page, '.tl-moment-opt'), 8000, 'a blank key moment');
+    if ((await momentOrFullTime(page)) === 'finished') {
+      await page.keyboard.press('Enter');
+      await page.locator('.tl-career-go .tl-primary').click();
+      await page.keyboard.press('KeyN');
+      await until(() => visible(page, '.tl-moment-opt'), 15000, 'a blank key moment in the next match');
+    }
     if (await iconless('.tl-moment button')) fail('blank: a moment button has neither icon nor text');
     await answerByKeys(page, page);
     await page.keyboard.press('Escape');

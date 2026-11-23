@@ -177,6 +177,8 @@ export class MatchEngine {
   readonly #control: MomentControl | null;
   #awaiting: PendingMoment | null = null;
   #lastMomentClock = -Infinity;
+  /** Just off the bench: his first touch is a moment wherever it is (player-career §8). */
+  #justOn = false;
 
   constructor(home: TeamSetup, away: TeamSetup, seed: number, conditions?: Conditions, control?: MomentControl) {
     this.#control = control ? { ...control } : null;
@@ -281,7 +283,8 @@ export class MatchEngine {
     if (control.budget + (dangerous ? 2 : 0) <= 0) return false;
     const dir = directionOf(player.side, s.period);
     const attackingHalf = dir > 0 ? player.x > HALF_LENGTH : player.x < HALF_LENGTH;
-    if (!dangerous && !attackingHalf && player.role !== 'MC') return false;
+    if (!dangerous && !attackingHalf && player.role !== 'MC' && !this.#justOn) return false;
+    this.#justOn = false;
     control.budget--;
     this.#lastMomentClock = s.clock;
     return true;
@@ -298,7 +301,7 @@ export class MatchEngine {
       const outfield = team.players.filter((p) => p.onPitch && !p.sentOff && p.role !== 'GK');
       const sameRole = outfield.filter((p) => p.role === hero.role);
       const off = (sameRole.length ? sameRole : outfield).sort((a, b) => a.stamina - b.stamina)[0];
-      if (off) this.substitute(team.side, off.id, hero.id);
+      if (off) this.#justOn = this.substitute(team.side, off.id, hero.id);
     }
   }
 
