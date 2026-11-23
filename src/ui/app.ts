@@ -32,7 +32,8 @@ import {
   settingsFor,
   wipeSave,
 } from '../save/api.js';
-import { button, clear, el, focusFirst, money } from './dom.js';
+import { button, clear, el, focusFirst, money, sheet } from './dom.js';
+import { Career, type CareerHost } from './career/career.js';
 import { ordinal } from '../i18n.js';
 import { icon, type IconName } from './icons.js';
 import { installStyles } from './styles.js';
@@ -132,6 +133,8 @@ export class Game implements ScreenHost {
   #showMenu = true;
   /** The inheritance story, alive only while a brand-new career is being set up. */
   #intro: Intro | null = null;
+  /** The player career. It owns the screen whenever the world has a hero. */
+  #career: Career;
 
   constructor(mount: HTMLElement) {
     installStyles();
@@ -155,6 +158,7 @@ export class Game implements ScreenHost {
     audio.setEnabled(this.settings.sound);
     applyMotion(this.settings.reducedMotion);
 
+    this.#career = new Career(this.#careerHost());
     this.root.append(this.#topbar, this.#main);
     mount.append(this.root);
     document.body.append(this.#toasts);
@@ -248,6 +252,14 @@ export class Game implements ScreenHost {
       const wrap = el('div', { class: 'tl-wrap tl-stack' });
       wrap.append(this.#intro.root);
       this.#main.append(wrap);
+      return;
+    }
+
+    if (this.#career.active) {
+      this.#nav.remove();
+      applyClubTheme(this.#career.club);
+      this.#career.render(this.#main, this.#topbar);
+      this.#main.scrollTop = 0;
       return;
     }
 
@@ -846,7 +858,7 @@ export class Game implements ScreenHost {
   saveNow(): void {
     // A world with no club is a world the player abandoned at the picker. Writing it would
     // fill a slot with a career nobody started, and the menu would offer to continue it.
-    if (this.world.managedClubId < 0) return;
+    if (this.world.managedClubId < 0 && !this.world.hero) return;
     saveGame(this.world, this.settings, this.#slot);
   }
 
@@ -860,6 +872,7 @@ export class Game implements ScreenHost {
     this.#slot = slot;
     this.world = restoreWorld(loaded.data);
     this.settings = settingsFor(loaded.data.settings);
+    this.#career = new Career(this.#careerHost());
     applyClubTheme(this.club);
     applyMotion(this.settings.reducedMotion);
     this.#showMenu = false;
@@ -874,19 +887,94 @@ export class Game implements ScreenHost {
    * wants, since it has to replace the live world with something saveable without
    * pretending the player asked to start playing again.
    */
-  startNew(slot: number, enter = true): void {
+  startNew(slot: number, enter = true, career?: 'club' | 'player'): void {
     wipeSave(slot);
     this.#slot = slot;
     const seed = Date.now() % 0x7fffffff || 20260906;
     this.world = createWorld(seed);
     startSeason(this.world);
+    this.#career = new Career(this.#careerHost());
     applyClubTheme(this.club);
     if (!enter) return;
+    if (career) this.#begin(career === 'player');
+    else this.#chooseCareer();
+  }
+
+  #begin(player: boolean): void {
     this.#showMenu = false;
     this.#route = 'home';
-    // A brand-new career meets the letter first. Loading an existing one never does.
+    if (player) {
+      void this.#career.startTrial();
+      return;
+    }
+    // A brand-new club career meets the letter first. Loading an existing one never does.
     this.#intro = new Intro(this.#introHost(), this.#reducedMotion);
     this.refresh();
+  }
+
+  /**
+   * Two big cards: a boot for the player career, the club badge for the club one
+   * (player-career §3). Closing without choosing goes back to the front door.
+   */
+  #chooseCareer(): void {
+    let chosen = false;
+    const pick = (player: boolean): void => {
+      chosen = true;
+      dialog.close();
+      audio.tick();
+      this.#begin(player);
+    };
+    const card = (player: boolean): HTMLButtonElement => {
+      const choice = button(t(player ? 'career.player' : 'career.club'), () => pick(player), {
+        class: `tl-btn tl-career-card ${player ? 'is-player' : 'is-club'}`, icon: player ? 'boot' : 'club',
+      });
+      choice.append(el('small', { text: t(player ? 'career.playerHint' : 'career.clubHint') }));
+      return choice;
+    };
+    const dialog = sheet({
+      title: t('career.choose'),
+      icon: 'star',
+      body: [el('div', { class: 'tl-career-choice' }, [card(true), card(false)])],
+      onClose: () => {
+        if (!chosen) this.openMenu();
+      },
+    });
+  }
+
+  #careerHost(): CareerHost {
+    // Getters for the same reason the intro's host has them: a new career replaces the world.
+    const game = this;
+    return {
+      get world(): World {
+        return game.world;
+      },
+      get settings(): Settings {
+        return game.settings;
+      },
+      get tier(): number {
+        return game.#tier;
+      },
+      get reducedMotion(): boolean {
+        return game.#reducedMotion;
+      },
+      saveNow: () => this.saveNow(),
+      refresh: () => this.refresh(),
+      openMenu: () => this.openMenu(),
+      toast: (message, glyph) => this.toast(message, glyph),
+      cover: (on) => {
+        this.root.classList.toggle('tl-hidden', on);
+      },
+      becomeClubCareer: () => {
+        applyClubTheme(this.club);
+        this.go('home');
+        this.refresh();
+      },
+    };
+  }
+
+  /** The player career, for the harnesses. */
+  get career(): Career {
+    return this.#career;
   }
 
   /** Leave the intro, with the defaults it would have applied on the way out. */

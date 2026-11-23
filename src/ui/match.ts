@@ -194,7 +194,6 @@ export class MatchScreen {
   #celebrating = false;
   /** Real time until which a career match runs at 1x, so the kid sees what the choice did. */
   #slowUntil = 0;
-  #careerCamera = '';
 
   constructor(opts: MatchScreenOptions) {
     this.#engine = opts.engine;
@@ -417,6 +416,8 @@ export class MatchScreen {
       class: 'tl-btn tl-sm tl-next-moment', icon: 'skip', 'aria-label': t('career.nextMoment'), tip: `${t('career.nextMoment')} · N`,
     });
     this.#playBtn.after(next);
+    this.#speedBtn.classList.add('tl-hidden');
+    this.#tacticsBtn.classList.add('tl-hidden');
   }
 
   /** Match seconds per real second, decided by where the ball is rather than a button. */
@@ -425,15 +426,9 @@ export class MatchScreen {
     if (this.#engine.awaiting || this.#celebrating) return 0;
     const ball = this.#engine.state.ball;
     const coming = ball.ownerId === career.heroId || ball.intendedReceiverId === career.heroId;
+    // The camera stays the one the kid chose: over his shoulder, the team-mates he could
+    // pass to are behind the lens. The slow-down is what tells him the ball is coming.
     const speed = now < this.#slowUntil ? 1 : coming ? 4 : 40;
-    // The freeze lands on a picture the kid was already watching: ease to the player camera
-    // as the ball comes to him. Reduced motion keeps whatever camera was chosen.
-    const camera = speed < 40 && !this.#reducedMotion ? 'player' : this.#camera;
-    if (camera !== this.#careerCamera) {
-      this.#careerCamera = camera;
-      this.#client.setFollow(camera === 'player' ? career.heroId : -1);
-      this.#client.setCameraMode(camera as CameraMode);
-    }
     this.#client.setPace(speed);
     return speed;
   }

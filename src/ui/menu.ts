@@ -16,6 +16,8 @@ import { crestSvg, defaultCrest } from './crest.js';
 import { icon } from './icons.js';
 import { deviceSettingRows, graphicsSettingRows } from './settings.js';
 import { unpackCrest, type Settings } from '../save/format.js';
+import { kitArt } from './art/kit.js';
+import { defaultLook } from '../sim/world/types.js';
 
 export interface MenuActions {
   /** Open a slot that already holds a career. */
@@ -146,12 +148,14 @@ function slotRow(info: SlotInfo, actions: MenuActions, root: HTMLElement): HTMLE
   const label = t('menu.slot', { n: info.index + 1 });
   const filled = !!info.summary && !info.unreadable;
 
-  const title = el('b', { text: filled ? (info.summary?.clubName ?? label) : label });
+  const title = el('b', { text: filled ? (info.summary?.heroName ?? info.summary?.clubName ?? label) : label });
   const detail = el('span', {
     class: 'meta',
     text: info.unreadable
       ? t('menu.unreadable')
-      : filled
+      : filled && info.summary?.mode === 'player'
+        ? t('menu.playerLine', { number: info.summary.shirtNumber ?? 0, age: info.summary.age ?? 16, season: info.summary.season + 1 })
+        : filled
         ? t('menu.slotLine', {
             season: info.summary?.season ?? 1,
             // The raw number, never a formatted ordinal: "3rd" is English, and dropping it
@@ -207,6 +211,10 @@ function slotRow(info: SlotInfo, actions: MenuActions, root: HTMLElement): HTMLE
 function slotBadge(info: SlotInfo, size: number): Element | null {
   const s = info.summary;
   if (!s || info.unreadable || s.kitPrimary === undefined || s.kitSecondary === undefined) return null;
+  // A player career's slot is his shirt, not a badge.
+  if (s.mode === 'player') {
+    return kitArt(defaultLook(), { primary: s.kitPrimary, secondary: s.kitSecondary }, { side: 'back', number: s.shirtNumber ?? 9, shirtOnly: true });
+  }
   // The same unpacker the save uses, so a badge with emblem layers shows them here too.
   const spec = unpackCrest(s.crest) ?? defaultCrest();
   return crestSvg({

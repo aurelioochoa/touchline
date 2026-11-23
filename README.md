@@ -16,6 +16,11 @@ npm test         # Vitest suite
 Other harnesses: `make smoke`, `make shots`, `make screens`, `make keyboard`.
 See `Makefile` and `GATES.md`.
 
+Two careers share the three save slots: the **Club career** (run a club) and the **Player
+career** (be one footballer: a trial, a week of drills, and your own key moments in every
+match). `npm run smoke` drives both on the built game; the player career's half is
+`scripts/smoke-career.mjs`. Measured results: `VERIFICATION-career.md`.
+
 ## License
 
 - Noncommercial use (personal, study, hobby, evaluation, noncommercial

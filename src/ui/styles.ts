@@ -2393,6 +2393,162 @@ button.tl-row-item:hover { background: rgba(255,255,255,0.045); }
   :root:not([data-motion="full"]) .tl-ball-opt .tl-ball-canvas { transition: none; transform: none; }
 }
 :root[data-motion="reduced"] .tl-ball-opt .tl-ball-canvas { transition: none; transform: none; }
+/* ---- the player career (design player-career). Every target clears 56px; lane safety is
+   ring THICKNESS and rings carry pips, so nothing here is colour alone (section D). ---- */
+.tl-moment { position: absolute; inset: 0; pointer-events: none; z-index: 30; }
+.tl-moment > *, .tl-aim-wrap * { pointer-events: auto; }
+.tl-moment-opt {
+  position: absolute; transform: translate(-50%, -50%);
+  width: 60px; min-width: 60px; height: 60px; padding: 0; border-radius: 50%;
+  background: rgba(6, 22, 14, 0.42); --tint: var(--tl-good);
+  border: var(--ring, 6px) solid var(--tint);
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.45), 0 0 22px color-mix(in srgb, var(--tint) 55%, transparent);
+}
+.tl-moment-opt.risk-mid { --tint: var(--tl-weak); }
+.tl-moment-opt.risk-high { --tint: var(--tl-bad); }
+.tl-moment-opt .tl-icon { width: 26px; height: 26px; }
+.tl-moment-opt:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+.tl-moment-opt.kind-shoot { border-radius: 14px; width: 76px; }
+.tl-moment-opt.kind-dribble .tl-icon { transform: rotate(var(--turn, 0rad)); }
+.tl-moment-opt.kind-cross { border-style: dashed; }
+.tl-moment-opt.kind-auto {
+  width: auto; padding: 0 22px; border-radius: 999px; border: 1px solid var(--tl-line-strong);
+  background: rgba(6, 22, 14, 0.82); box-shadow: var(--tl-sh-2);
+}
+.tl-moment.is-aiming > .tl-moment-opt { display: none; }
+.tl-hint { animation: tl-hint 1.1s ease-in-out infinite; }
+@keyframes tl-hint { 50% { box-shadow: 0 0 0 10px rgba(255,255,255,0.35), 0 0 30px #fff; } }
+.tl-aim-wrap { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.tl-aim {
+  display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 58px);
+  padding: 6px; gap: 0; border: 5px solid #f5f7fa; border-bottom: 0; border-radius: 6px 6px 0 0;
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,0.1) 0 2px, transparent 2px 10px), rgba(6,22,14,0.6);
+}
+.tl-aim-zone { position: relative; border: 1px dashed rgba(255,255,255,0.25); background: none; cursor: crosshair; min-height: 56px; }
+.tl-aim-zone.is-aimed::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: var(--spread); height: var(--spread);
+  transform: translate(-50%, -50%); border-radius: 50%; border: 3px solid #fff;
+  background: radial-gradient(circle, rgba(255,255,255,0.5) 0 4px, rgba(255,255,255,0.12) 5px);
+}
+.tl-aim-zone:focus-visible { outline: 3px solid var(--tl-good); outline-offset: -3px; }
+.tl-next-moment .tl-icon { color: var(--tl-good); }
+.tl-career-match:has(.tl-moment) .tl-onball { display: none; }
+.tl-celebrate { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); display: flex; gap: 12px; z-index: 31; }
+.tl-celebrate-opt { width: 64px; height: 64px; padding: 0; border-radius: 50%; }
+.tl-celebration { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); color: #ffd21f; z-index: 31;
+  filter: drop-shadow(0 6px 18px rgba(0,0,0,0.6)); animation: tl-pop 1.4s ease-out both; pointer-events: none; }
+@keyframes tl-pop { 0% { transform: translate(-50%, -50%) scale(0.2); opacity: 0; } 20% { transform: translate(-50%, -50%) scale(1.3); opacity: 1; } 80% { opacity: 1; } 100% { transform: translate(-50%, -80%) scale(1); opacity: 0; } }
+.tl-stage { position: fixed; z-index: 20; }
+.tl-clipboard { position: absolute; top: max(14px, env(safe-area-inset-top)); left: 16px; display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: 999px; background: rgba(6,22,14,0.75); z-index: 31; }
+.tl-clipboard i { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--tl-ink-3); }
+.tl-clipboard i.good { background: var(--tl-good); border-color: var(--tl-good); }
+.tl-clipboard i.miss { border-color: var(--tl-bad); background: repeating-linear-gradient(45deg, var(--tl-bad) 0 2px, transparent 2px 5px); }
+.tl-stage-back { position: absolute; top: max(10px, env(safe-area-inset-top)); right: 12px; z-index: 31; background: rgba(6,22,14,0.75); }
+
+.tl-career-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tl-career-card { flex-direction: column; min-height: 150px; padding: 18px 10px; font-size: 16px; }
+.tl-career-card .tl-icon { width: 48px; height: 48px; }
+.tl-career-card small { color: var(--tl-ink-2); font-weight: 560; font-size: 12.5px; }
+.tl-career-title { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.tl-career-head { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 15px; font-weight: 760; color: var(--tl-ink-2); }
+.tl-signing, .tl-locker { padding: 14px 16px 120px; max-width: 760px; }
+.tl-offer-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.tl-offer {
+  position: relative; flex: 1 1 108px; max-width: 180px; min-height: 150px; flex-direction: column; gap: 6px; padding: 12px 8px;
+}
+.tl-offer.is-picked { border: 3px solid var(--tl-club); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tl-club) 35%, transparent), var(--tl-sh-2); }
+.tl-offer-name { font-size: 15px; letter-spacing: 0.04em; }
+.tl-offer-facts { display: flex; align-items: center; gap: 8px; color: var(--tl-ink-2); font-size: 12px; }
+.tl-offer-tier { display: inline-flex; gap: 2px; align-items: flex-end; }
+.tl-offer-tier i { width: 4px; height: 12px; border-radius: 1px; background: var(--tl-ink-2); }
+.tl-offer-seats { display: inline-flex; gap: 3px; align-items: center; }
+.tl-offer-start { position: absolute; top: 6px; right: 6px; color: var(--tl-ink-3); }
+.tl-offer-start.is-start { color: var(--tl-good); }
+.tl-offer-loan { position: absolute; top: 8px; left: 8px; color: var(--tl-ok); }
+.tl-picker { display: flex; flex-direction: column; gap: 8px; }
+.tl-picker-label { display: flex; align-items: center; gap: 8px; color: var(--tl-ink-2); font-weight: 700; font-size: 13px; }
+.tl-picker-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.tl-pick[aria-pressed="true"] { background: var(--tl-club); color: var(--tl-club-ink); border-color: transparent; }
+.tl-swatch { width: var(--tl-tap); padding: 0; }
+.tl-swatch .tl-icon { width: 30px; height: 30px; }
+.tl-swatch[aria-pressed="true"] { outline: 3px solid #fff; outline-offset: 2px; background: rgba(255,255,255,0.14); }
+.tl-pos-art { display: inline-flex; }
+@media (max-width: 759px) {
+  .tl-topbar:has(.tl-career-id) { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "id menu set"; }
+}
+@media (max-width: 520px) {
+  .tl-next-moment > span { display: none; }
+  .tl-btn.tl-next-moment { width: var(--tl-tap); padding: 0; }
+}
+.tl-sign-name { display: flex; align-items: center; gap: 12px; font-size: 18px; }
+.tl-sign-name svg:first-child { width: 72px; height: auto; }
+.tl-sign-go { margin-top: 6px; }
+.tl-peg { display: grid; grid-template-columns: auto 1fr; gap: 14px 18px; align-items: center;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--kit) 22%, var(--tl-surface)), var(--tl-surface)); }
+.tl-peg-shirt { display: flex; align-items: flex-end; gap: 4px; }
+.tl-peg-shirt > svg { width: 120px; height: auto; filter: drop-shadow(0 8px 14px rgba(0,0,0,0.45)); }
+.tl-boot-art.tl-btn { width: 64px; height: 64px; padding: 0; }
+.tl-boot-art .tl-icon { width: 40px; height: 40px; }
+.tl-rings { display: flex; justify-content: space-around; gap: 6px; }
+.tl-ring { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.tl-ring-art { position: relative; display: inline-flex; }
+.tl-ring-art > .tl-icon { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--tl-ink); }
+.tl-ring.ring-coach { color: var(--tl-ok); }
+.tl-ring.ring-team { color: var(--tl-good); }
+.tl-ring.ring-fans { color: var(--tl-weak); }
+.tl-ring-label { font-size: 12px; color: var(--tl-ink-2); font-weight: 650; }
+.tl-pips { display: inline-flex; gap: 4px; }
+.tl-pips i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; opacity: 0.8; }
+.tl-pips i.on { background: currentColor; }
+.tl-peg-stats { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; }
+.tl-stat-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,0.07); font-size: 15px; }
+.tl-career-vs { display: flex; align-items: center; justify-content: space-around; gap: 10px; }
+.tl-career-vs-mid { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--tl-ink-2); font-size: 12px; }
+.tl-career-start { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 12px 0; font-weight: 700; }
+.tl-career-start.is-start { color: var(--tl-good); }
+.tl-career-start.is-bench { color: var(--tl-weak); }
+.tl-career-go { display: flex; gap: 10px; }
+.tl-career-go > .tl-btn { flex: 1; }
+.tl-week-slots { display: flex; gap: 12px; }
+.tl-week-slot { flex: 1; min-height: 72px; border-radius: var(--tl-r); display: inline-flex; align-items: center; justify-content: center; }
+.tl-week-slot.is-used { background: color-mix(in srgb, var(--tl-club) 22%, transparent); border: 1px solid var(--tl-line-strong); }
+.tl-practice { display: flex; gap: 10px; margin-top: 12px; justify-content: center; }
+.tl-shelf-row { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
+.tl-shelf-item { display: inline-flex; align-items: center; justify-content: center; aspect-ratio: 1; border-radius: 12px;
+  background: rgba(255,255,255,0.04); color: var(--tl-ink-3); }
+.tl-shelf-item.is-earned { background: color-mix(in srgb, #ffd21f 20%, transparent); color: #ffd21f; }
+.tl-activity-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tl-activity { flex-direction: column; min-height: 92px; }
+.tl-activity .tl-icon { width: 30px; height: 30px; }
+.tl-drill-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--tl-line); }
+.tl-drill-name { flex: 1; display: flex; align-items: center; gap: 10px; }
+.tl-post-score { text-align: center; font-size: 40px; font-weight: 820; letter-spacing: -0.02em; }
+.tl-rating { display: flex; justify-content: center; color: #ffd21f; margin: 4px 0 14px; }
+.tl-rating i { width: 14px; height: 14px; }
+.tl-post-moments, .tl-post-rings { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 12px; }
+.tl-post-moment { display: inline-flex; width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 50%;
+  border: 3px solid var(--tl-ink-3); }
+.tl-post-moment.is-goal { border-color: #ffd21f; color: #ffd21f; }
+.tl-post-moment.is-good { border-color: var(--tl-good); }
+.tl-post-moment.is-lost { border-color: var(--tl-bad); border-style: dashed; }
+.tl-ring-delta { display: inline-flex; align-items: center; gap: 2px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.06); }
+.tl-ring-delta.up { color: var(--tl-good); }
+.tl-ring-delta.down { color: var(--tl-bad); }
+.tl-stars { display: flex; justify-content: center; gap: 8px; color: var(--tl-ink-3); }
+.tl-stars .on { color: #ffd21f; }
+.tl-frame { display: flex; justify-content: center; padding: 14px; margin: 10px auto; width: fit-content;
+  border: 6px solid #b08a4a; border-radius: 6px; background: #0c1c14; box-shadow: inset 0 0 0 2px #e8cf8f, var(--tl-sh-2); }
+.tl-frame > svg { width: 140px; height: auto; }
+.tl-frame.tl-frame-sm > svg { width: 84px; }
+.tl-career-farewell { display: flex; align-items: center; justify-content: center; gap: 8px; color: #ffd21f; font-weight: 700; }
+@media (max-width: 520px) {
+  .tl-peg { grid-template-columns: 1fr; justify-items: center; }
+  .tl-peg-shirt > svg { width: 96px; }
+  .tl-shelf-row { grid-template-columns: repeat(4, 1fr); }
+}
+:root[data-motion="reduced"] .tl-hint,
+:root[data-motion="reduced"] .tl-celebration { animation: none !important; }
 `;
 
 let injected = false;

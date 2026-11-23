@@ -62,7 +62,9 @@ function boot(): void {
       for (let i = 0; i < n; i++) game.continueDay();
     },
     newCareer: () => game.newCareer(),
-    startNew: (slot: number) => game.startNew(slot),
+    // Straight into a Club career unless told otherwise, so the older harnesses still meet
+    // the letter; the menu's own button asks which career first.
+    startNew: (slot: number, career: 'club' | 'player' = 'club') => game.startNew(slot, true, career),
     openSlot: (slot: number) => game.openSlot(slot),
     openMenu: () => game.openMenu(),
     // The sound engine, so a harness can drive every voice without a match to cue it.

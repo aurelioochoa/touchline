@@ -81,13 +81,12 @@ export class MomentPad {
     this.root.remove();
   }
 
-  /** The buttons, in the order the keyboard walks them. */
+  /** The buttons on screen, in the order the keyboard walks them. */
   get buttons(): HTMLButtonElement[] {
-    return this.#ordered().map((placed) => placed.button);
-  }
-
-  #ordered(): Placed[] {
-    return [...this.#placed].sort((a, b) => a.x - b.x || a.y - b.y);
+    return [...this.#placed]
+      .filter((placed) => placed.button.style.display !== 'none')
+      .sort((a, b) => a.x - b.x || a.y - b.y)
+      .map((placed) => placed.button);
   }
 
   #pick(option: MomentOption): void {
@@ -109,22 +108,30 @@ export class MomentPad {
   #layout = (): void => {
     if (this.#done) return;
     const { host, project } = this.#opts;
-    const width = host.clientWidth;
-    const height = host.clientHeight;
+    const frame = host.getBoundingClientRect();
+    const width = frame.width;
+    const height = frame.height;
+    const shown: Placed[] = [];
     for (const placed of this.#placed) {
       if (placed.option.kind === 'auto') {
         placed.x = width / 2;
         placed.y = height - 92;
+        shown.push(placed);
         continue;
       }
-      const point = project(placed.option.x, placed.option.y, placed.option.z) ?? { x: width / 2, y: height / 2 };
-      placed.x = point.x;
-      placed.y = point.y;
+      // A team-mate out of the picture is not a choice anyone can read, so it is not offered.
+      const point = project(placed.option.x, placed.option.y, placed.option.z);
+      const inside = !!point && point.x > frame.left && point.x < frame.right && point.y > frame.top && point.y < frame.bottom;
+      placed.button.style.display = inside ? '' : 'none';
+      if (!point || !inside) continue;
+      placed.x = point.x - frame.left;
+      placed.y = point.y - frame.top;
+      shown.push(placed);
     }
     // Fan apart anything closer than a target's width, a few relaxation passes.
     for (let pass = 0; pass < 6; pass++) {
-      for (const first of this.#placed) {
-        for (const second of this.#placed) {
+      for (const first of shown) {
+        for (const second of shown) {
           if (first === second) continue;
           const dx = second.x - first.x;
           const dy = second.y - first.y;
@@ -144,8 +151,9 @@ export class MomentPad {
         }
       }
     }
-    const heroPoint = project(this.#opts.hero.x, this.#opts.hero.y, 0);
-    for (const placed of this.#placed) {
+    const heroScreen = project(this.#opts.hero.x, this.#opts.hero.y, 0);
+    const heroPoint = heroScreen && { x: heroScreen.x - frame.left, y: heroScreen.y - frame.top };
+    for (const placed of shown) {
       placed.x = clamp(placed.x, 40, width - 40);
       placed.y = clamp(placed.y, 76, height - 60);
       placed.button.style.left = `${placed.x.toFixed(0)}px`;
@@ -165,7 +173,8 @@ export class MomentPad {
   }
 
   #onKey = (event: KeyboardEvent): void => {
-    if (this.#done) return;
+    // A dialog over the match (Back's "leave?") owns the keys while it is open.
+    if (this.#done || document.querySelector('.tl-overlay')) return;
     const list = this.#grid ? [...this.#grid.querySelectorAll<HTMLButtonElement>('button')] : this.buttons;
     const current = list.indexOf(document.activeElement as HTMLButtonElement);
     const step = (delta: number): void => {
@@ -211,13 +220,18 @@ export class MomentPad {
         if (this.#aimZone === engineZone) this.#finish(option, shotAt(state, hero, engineZone, suggested));
         else this.#aim(engineZone, cell);
       }, { class: 'tl-aim-zone', 'aria-label': t(engineZone >= 3 ? 'moment.aimHigh' : 'moment.aimLow', { n: (engineZone % 3) + 1 }) });
-      cell.addEventListener('focus', () => this.#aim(engineZone, cell));
+      // Keyboard focus aims, so arrows then Enter shoot. A tap also focuses the button, and
+      // there the first tap must only aim: the second one shoots (§10).
+      cell.addEventListener('focus', () => {
+        if (cell.matches(':focus-visible')) this.#aim(engineZone, cell);
+      });
       grid.append(cell);
     }
     const back = button('', () => this.#closeAim(), { class: 'tl-btn tl-ghost tl-icon-only tl-aim-back', icon: 'back', 'aria-label': t('moment.backOut') });
+    const frame = host.getBoundingClientRect();
     const goal = project(option.x, option.y, option.z);
-    const left = clamp(goal?.x ?? host.clientWidth / 2, 120, host.clientWidth - 120);
-    const top = clamp(goal?.y ?? host.clientHeight / 3, 110, host.clientHeight - 200);
+    const left = clamp((goal?.x ?? frame.width / 2) - frame.left, 120, frame.width - 120);
+    const top = clamp((goal?.y ?? frame.height / 3) - frame.top, 110, frame.height - 200);
     const wrap = el('div', { class: 'tl-aim-wrap', style: `left:${left.toFixed(0)}px;top:${top.toFixed(0)}px` }, [grid, back]);
     this.root.append(wrap);
     this.#grid = wrap;

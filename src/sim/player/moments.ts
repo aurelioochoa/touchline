@@ -71,7 +71,7 @@ export function momentOptions(state: MatchState, hero: MatchPlayer, suggested: B
     });
   }
 
-  // Up to four team-mates, the most useful first: forward progress minus the lane's risk.
+  // Up to three team-mates, the most useful first: forward progress minus the lane's risk.
   const offsideX = lastDefenderX(state, hero.side, dir);
   const passes = activePlayers(team)
     .filter((mate) => mate.id !== hero.id && mate.role !== 'GK')
@@ -89,7 +89,7 @@ export function momentOptions(state: MatchState, hero: MatchPlayer, suggested: B
     })
     .filter((entry) => entry.usable)
     .sort((a, b) => b.value - a.value)
-    .slice(0, 4);
+    .slice(0, 3);
   for (const entry of passes) {
     options.push({ kind: 'pass', x: entry.mate.x, y: entry.mate.y, z: 0, risk: entry.risk, action: entry.action, receiverId: entry.mate.id });
   }
@@ -122,7 +122,7 @@ export function momentOptions(state: MatchState, hero: MatchPlayer, suggested: B
 }
 
 /** How close the nearest opponent is to a spot: 1 within a stride of it, 0 four metres clear. */
-function crowdAt(state: MatchState, hero: MatchPlayer, x: number, y: number): number {
+export function crowdAt(state: MatchState, hero: MatchPlayer, x: number, y: number): number {
   let nearest = Infinity;
   for (const opponent of activePlayers(teamOf(state, otherSide(hero.side)))) {
     nearest = Math.min(nearest, dist(opponent.x, opponent.y, x, y));

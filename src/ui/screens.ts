@@ -225,6 +225,16 @@ export function renderHome(host: ScreenHost, root: HTMLElement): void {
   main.append(leagueCard(host, table));
 
   rail.append(clubCard(host), moneyCard(host), scorerCard(host));
+  // Legacy: the retired hero's shirt, framed in the honours of the club he now runs.
+  const legend = world.legend;
+  if (legend?.clubId === club.id) {
+    rail.prepend(card([
+      heading(t('retire.legend'), 'trophy'),
+      el('div', { class: 'tl-frame tl-frame-sm' }, [kitArt(world.look, { primary: club.kitPrimary, secondary: club.kitSecondary }, { side: 'back', number: legend.number, shirtOnly: true })]),
+      el('b', { text: fullName(world.book, legend.firstIdx, legend.lastIdx) }),
+      el('span', { class: 'tl-muted', text: `${t('career.apps')} ${legend.apps} · ${t('career.goals')} ${legend.goals}` }),
+    ]));
+  }
   root.append(el('div', { class: 'tl-dash' }, [main, rail]));
 }
 
@@ -512,7 +522,8 @@ function fullTimeCard(host: ScreenHost, last: LastMatchView): HTMLElement {
 
 // ---- league table --------------------------------------------------------------
 
-export function renderTable(host: ScreenHost, root: HTMLElement): void {
+/** Only the world and a club: the player career's locker shows the same table. */
+export function renderTable(host: Pick<ScreenHost, 'world' | 'club'>, root: HTMLElement): void {
   const { world, club } = host;
   if (!club) return;
   const table = buildTable(world, club.tier);
@@ -543,7 +554,7 @@ export function renderTable(host: ScreenHost, root: HTMLElement): void {
 }
 
 function tableElement(
-  host: ScreenHost,
+  host: Pick<ScreenHost, 'world' | 'club'>,
   rows: ReturnType<typeof buildTable>,
   meId: number,
   startPos: number,

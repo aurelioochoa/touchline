@@ -945,14 +945,15 @@ export class RenderClient {
   }
 
   /**
-   * Where a pitch point is on screen, in CSS pixels from the canvas's top left — what the
-   * key-moment buttons are anchored to. Null when it is behind the camera.
+   * Where a pitch point is on screen, in viewport CSS pixels — what the key-moment buttons
+   * are anchored to. Read from the canvas's own rectangle, because on an upright phone it
+   * letterboxes with a transform that its offsets do not see. Null when behind the camera.
    */
   project(simX: number, simY: number, height: number): { x: number; y: number } | null {
     const point = new THREE.Vector3(toSceneX(simX), height, toSceneZ(simY)).project(this.cam.camera);
     if (point.z > 1) return null;
-    const canvas = this.renderer.domElement;
-    return { x: (point.x + 1) / 2 * canvas.clientWidth, y: (1 - point.y) / 2 * canvas.clientHeight };
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + (point.x + 1) / 2 * rect.width, y: rect.top + (1 - point.y) / 2 * rect.height };
   }
 
   /** Snap the camera, e.g. after a cut or on the first frame. */
@@ -971,6 +972,9 @@ export class RenderClient {
     this.#envTarget?.dispose();
     this.#pmrem.dispose();
     this.renderer.dispose();
+    // Hand the context back now rather than at garbage collection: a player career opens a
+    // stage per drill, and software GL stalls for seconds when several are reclaimed at once.
+    this.renderer.forceContextLoss();
   }
 
   /**

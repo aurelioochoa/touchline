@@ -43,7 +43,7 @@ export class Stage {
   #raf = 0;
   #rng = streamOf(Date.now() % 100000, 'stage');
 
-  constructor(state: MatchState, opts: StageOptions) {
+  constructor(opts: StageOptions) {
     const canvas = el('canvas');
     this.root.append(canvas);
     document.body.append(this.root);
@@ -51,7 +51,6 @@ export class Stage {
     this.client.setTrainingGround(true);
     this.client.setCameraMode('player');
     this.client.cam.mirror(-1);
-    this.setState(state);
     addEventListener('resize', this.#onResize, { passive: true });
     this.#raf = requestAnimationFrame(this.#frame);
   }
@@ -62,8 +61,8 @@ export class Stage {
 
   setState(state: MatchState): void {
     this.state = state;
+    // No applyGround: it rebuilds the stands, and a training ground has none.
     this.client.applyConditions(state.conditions);
-    this.client.applyGround(state);
     this.client.applyKits(state);
     this.client.setFollow(this.hero.id);
     this.client.captureTick(state);
@@ -121,18 +120,16 @@ export class Stage {
     });
   }
 
-  /** The ball through the air to a point, with an arc. */
-  kick(x: number, y: number, z: number, seconds: number, loft = 0.6): Promise<void> {
+  /** The ball along the grass to a point, with the slightest lift. */
+  kickTo(x: number, y: number, seconds: number): Promise<void> {
     const ball = this.state.ball;
     const fromX = ball.x;
     const fromY = ball.y;
     ball.ownerId = -1;
-    this.hero.action = 'shoot';
-    this.hero.actionTicks = 3;
     return this.play(seconds, (fraction) => {
       ball.x = lerp(fromX, x, fraction);
       ball.y = lerp(fromY, y, fraction);
-      ball.z = lerp(0.1, z, fraction) + Math.sin(Math.PI * fraction) * loft;
+      ball.z = Math.sin(Math.PI * fraction) * 0.25;
       ball.vx = (x - fromX) / seconds;
       ball.vy = (y - fromY) / seconds;
       ball.vz = 0;
@@ -155,6 +152,7 @@ export class Stage {
     this.#last = now;
     this.#seconds += dt;
     this.#accumulated += dt;
+    if (!this.state) return;
     while (this.#accumulated >= TICK) {
       this.#accumulated -= TICK;
       this.tick();

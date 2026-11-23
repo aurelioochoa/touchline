@@ -266,7 +266,8 @@ export function assignSquadNumbers(world: World, club: Club): void {
     taken.add(world.hero.number);
   }
   keepers.forEach((k, i) => {
-    const n = i === 0 ? 1 : 12 + i;
+    let n = i === 0 ? 1 : 12 + i;
+    while (taken.has(n)) n++;
     k.squadNumber = n;
     taken.add(n);
   });

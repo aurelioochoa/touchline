@@ -11,7 +11,6 @@ import { attr, setAttr, type AnyAttr } from '../ratings/attributes.js';
 import { caOf, scaleToCa } from '../ratings/ability.js';
 import { pickEleven } from '../career/squad.js';
 import { assignSquadNumbers, clubStrength, createPlayer } from '../world/worldgen.js';
-import { rollName } from '../world/names.js';
 import type { Club, World, WorldPlayer } from '../world/types.js';
 import type { MomentControl } from '../match/engine.js';
 
@@ -125,13 +124,6 @@ export function createHero(world: World, choices: HeroChoices): WorldPlayer {
   };
   assignSquadNumbers(world, club);
   return player;
-}
-
-/** A new name from the same book, for the signing screen's dice. */
-export function rerollName(world: World, player: WorldPlayer, roll: number): void {
-  const name = rollName(streamOf(world.seed + roll * 7, 'hero-name'), world.book, player.culture);
-  player.firstIdx = name.first;
-  player.lastIdx = name.last;
 }
 
 export function heroPlayer(world: World): WorldPlayer | null {
