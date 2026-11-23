@@ -7,9 +7,9 @@ Design: `docs/game-design/designs/touchline-player-career.md` in the kidtopiapla
 
 | Gate | Command | Result |
 |---|---|---|
-| Tests | `npm test` | RESULT_TESTS |
+| Tests | `npm test` | `Test Files 30 passed (30)`, `Tests 305 passed (305)` — 285 before this mode, 20 new in `src/sim/player/*.test.ts` |
 | Build | `npm run build` | type-check, production build, then `all gates passed` (licence, zero assets, no live network) |
-| Smoke | `npm run smoke` | the existing club smoke (`smoke.mjs`, RESULT_CLUB_SMOKE) then `smoke-career.mjs`: `smoke: OK` |
+| Smoke | `npm run smoke` | the existing club smoke (`smoke.mjs`, `52/52 checks passed, 0 console errors`) then `smoke-career.mjs`: `smoke: OK` |
 
 Bundle: 1,214.2 kB before (35ed2af) → 1,280.9 kB after, **+67 kB minified, +20 kB gzip**, inside
 the design's +60–90 KB budget. No new runtime dependency; Playwright 1.65.0 is a pinned
@@ -57,7 +57,24 @@ It fails on any console error, page error, failed request or external request.
 
 ## Screenshots looked at (`/tmp/touchline-shots/`)
 
-SCREENSHOTS
+Looked at, and fixed what was wrong in them:
+
+- `desktop-trial.png`, `desktop-hoops.png`, `desktop-aim.png` — the dusk training ground
+  (the first run still showed the stands: `applyGround` rebuilt them; the stage no longer
+  calls it), the corner hoops, the 3×2 aim grid with its circle.
+- `desktop-signing.png`, `desktop-locker.png`, `desktop-match-moment.png`,
+  `desktop-post-match.png`, `desktop-menu.png` — crest cards, the peg with shirt, boots and
+  rings, a frozen match with lane rings, the icon-only post-match card, the player slot.
+- `phone-trial.png`, `phone-aim.png`, `phone-signing.png`, `phone-locker.png`,
+  `phone-match-moment.png`, `phone-post-match.png` at 360×780 — the first phone run had every
+  moment button in the wrong place (the upright letterbox centres the canvas with a transform
+  that `offsetTop` does not see; `project()` now reads the canvas rectangle), the career top bar
+  on two rows (now one), and off-screen team-mates piled on the screen edge (no longer offered).
+- `iframe-trial.png`, `iframe-locker.png`, `blank-trial.png`, `blank-locker.png`.
+
+The harness runs on the game's own low graphics setting: software GL could not screenshot
+the full match crowd reliably. `/tmp/touchline-shots/default-quality/` keeps the trial, Hoops,
+aim, signing and locker at default graphics from an earlier run.
 
 ## Deliberate differences from the design
 
@@ -77,6 +94,10 @@ SCREENSHOTS
 - **The hero's boot colour shows in the locker only**, not on the 3D figure.
 - **A reload mid-match restarts that fixture**, exactly as the Club career already does; the
   design's "a freeze is engine state" save-anywhere was never true of matches in this game.
+- **Off-screen team-mates are not offered** at a freeze: a button pinned to the screen edge
+  for a player nobody can see is not a readable choice. Up to three passes are offered.
+- **A substitute's first touch is always a moment**, wherever it is, so a late entry almost
+  never ends a match without one; the celebration picker closes itself after six seconds.
 - **Back in a career match asks first** ("Keep playing" / "Play the rest for me"): the Club
   career's Back detaches the match, but a player career has no club screen to watch it from.
 
